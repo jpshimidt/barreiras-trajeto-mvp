@@ -51,14 +51,14 @@ def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira |
             numero_inicio = st.number_input(
                 "Nº início (opcional)",
                 min_value=0,
-                value=barreira.numero_inicio or 0,
+                value=(barreira.numero_inicio or 0) if barreira else 0,
                 step=1,
             )
         with col2:
             numero_fim = st.number_input(
                 "Nº fim (opcional)",
                 min_value=0,
-                value=barreira.numero_fim or 0,
+                value=(barreira.numero_fim or 0) if barreira else 0,
                 step=1,
             )
         with col3:
