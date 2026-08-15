@@ -1,0 +1,9 @@
+# Marco 1 (script de linha de comando)
+requests
+shapely
+pyproj
+
+# Marco 4 em diante (interface Streamlit)
+streamlit
+folium
+streamlit-folium

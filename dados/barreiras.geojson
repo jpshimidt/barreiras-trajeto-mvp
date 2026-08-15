@@ -1,0 +1,74 @@
+{
+  "type": "FeatureCollection",
+  "name": "barreiras-teste-marco1",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-46.6300, -23.5190],
+          [-46.6360, -23.5175],
+          [-46.6430, -23.5160],
+          [-46.6500, -23.5148],
+          [-46.6570, -23.5142],
+          [-46.6640, -23.5145]
+        ]
+      },
+      "properties": {
+        "id": "marginal-tiete-trecho-teste",
+        "nome": "Marginal Tietê",
+        "tipo": "via expressa",
+        "municipio": "São Paulo",
+        "origem": "manual",
+        "osm_way_id": null,
+        "importado_em": "2026-08-15"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-46.6640, -23.5140],
+          [-46.6655, -23.5090],
+          [-46.6670, -23.5030],
+          [-46.6680, -23.4960],
+          [-46.6690, -23.4890],
+          [-46.6700, -23.4830]
+        ]
+      },
+      "properties": {
+        "id": "caetano-alvares-trecho-teste",
+        "nome": "Avenida Engenheiro Caetano Álvares",
+        "tipo": "avenida",
+        "municipio": "São Paulo",
+        "origem": "manual",
+        "osm_way_id": null,
+        "importado_em": "2026-08-15"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-46.6800, -23.4990],
+          [-46.6900, -23.4960],
+          [-46.7000, -23.4930],
+          [-46.7100, -23.4905],
+          [-46.7200, -23.4880]
+        ]
+      },
+      "properties": {
+        "id": "inajar-de-souza-trecho-teste",
+        "nome": "Avenida Inajar de Souza",
+        "tipo": "avenida",
+        "municipio": "São Paulo",
+        "origem": "manual",
+        "osm_way_id": null,
+        "importado_em": "2026-08-15"
+      }
+    }
+  ]
+}

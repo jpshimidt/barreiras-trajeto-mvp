@@ -1,0 +1,8 @@
+# Chave do OpenRouteService — nunca versionar
+.streamlit/secrets.toml
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env

@@ -1,0 +1,14 @@
+# Ruas cadastradas como barreira. Uma por linha; '#' comenta.
+#
+# PROVISÓRIO: ruas de fronteira da Zona Norte escolhidas só para testar o
+# importador. A grafia abaixo é chute e precisa ser conferida contra o OSM —
+# rode o importador e olhe o relatório de ways por rua.
+#
+# Substituir pela lista real revisada por quem conhece a cidade.
+
+Marginal Tietê
+Avenida Engenheiro Caetano Álvares
+Avenida Inajar de Souza
+Avenida Santos Dumont
+Avenida Cruzeiro do Sul
+Rodovia Fernão Dias
