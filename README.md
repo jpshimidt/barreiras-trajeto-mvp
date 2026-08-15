@@ -15,11 +15,16 @@ Não existe critério de distância. Andar ao longo da barreira conta igual a at
 **Nada é persistido.** A aplicação processa endereços residenciais de crianças: sem log,
 sem histórico, sem analytics.
 
-## Estado: Marcos 1, 2 e 3 concluídos
+## Estado
 
-A lógica mora em `core/`; `marco1.py` é a casca de linha de comando com os endereços fixos.
+Marcos 1 a 4 entregues. Os Marcos 5 (deploy) e 6 (validação) dependem de ações suas —
+veja **Pendências**.
+
+A lógica mora em `core/`. Nem `app.py` nem `marco1.py` decidem coisa alguma: são cascas.
 
 ```
+app.py             interface Streamlit (main file path do Streamlit Cloud)
+marco1.py          a mesma regra em linha de comando, com endereços fixos
 core/
 ├── geo.py         projeção UTM e buffer métrico
 ├── barreiras.py   carga do GeoJSON e interseção rota x buffer
@@ -29,12 +34,15 @@ core/
 ├── ors.py         chave da API e tradução de erro HTTP
 └── erros.py       ErroExterno
 scripts/
-└── importar_barreiras.py  Overpass -> dados/barreiras.geojson (roda offline)
+├── importar_barreiras.py      Overpass -> dados/barreiras.geojson (roda offline)
+└── rodar_casos_conhecidos.py  valida o CSV de casos contra o pipeline real
 testes/
-├── test_decisao.py       a regra e a geometria
-├── test_importador.py    conversão Overpass -> GeoJSON
-├── conftest.py           bloqueia socket na suíte inteira
-└── casos_conhecidos.csv  só o cabeçalho — aguarda os casos reais (Marco 6)
+├── test_decisao.py         a regra e a geometria
+├── test_importador.py      conversão Overpass -> GeoJSON
+├── test_app.py             a interface, via AppTest, com serviços dublados
+├── test_casos_conhecidos.py  leitura do CSV e o laço do validador
+├── conftest.py             bloqueia socket na suíte inteira
+└── casos_conhecidos.csv    só o cabeçalho — aguarda os casos reais (Marco 6)
 ```
 
 `decisao.py` não sabe o que é HTTP e `geo.py` não sabe o que é transporte escolar: a
@@ -43,7 +51,7 @@ regra pode ser testada sem chave de API e sem rede.
 ### Testes
 
 ```bash
-python -m pytest          # 59 testes, ~0,3 s
+python -m pytest          # 92 testes, ~2 s
 ```
 
 Use `python -m pytest`, não `pytest` direto — em máquina onde o `pytest` do PATH vive num
@@ -64,7 +72,36 @@ O que os testes cobrem:
 - cadastro de barreiras vazio estoura erro em vez de virar "sem direito" silencioso;
 - candidato de geocodificação em outro município é descartado; scores próximos viram aviso
   de ambiguidade;
-- resposta do ORS sem rota vira `ErroExterno` — "não sei responder", não "sem direito".
+- resposta do ORS sem rota vira `ErroExterno` — "não sei responder", não "sem direito";
+- a interface inteira, com geocodificação e roteamento dublados: botão desabilitado sem os
+  dois endereços, endereço formatado exibido, empate de score virando escolha do usuário,
+  falha do ORS que **não** aparece como "sem direito", e a flag da escola decidindo sem
+  gastar chamada de rota;
+- o laço do validador de casos conhecidos, incluindo o código de saída em divergência.
+
+## Interface
+
+```bash
+pip install -r requirements.txt
+export ORS_API_KEY="sua-chave"
+streamlit run app.py
+```
+
+O fluxo é o do plano: endereço da casa → endereço formatado de volta para conferência →
+endereço da escola → conferência → checkbox "a responsável escolheu esta escola" →
+Calcular → resultado destacado, motivo, distância e mapa (rota em azul, barreiras em
+vermelho com traço grosso nas tocadas, pins em A e B).
+
+Três decisões da interface que valem registro:
+
+- **Geocodificação e roteamento não são cacheados.** `st.cache_data` guardaria endereços
+  residenciais de crianças na memória do servidor, compartilhados entre sessões — o oposto
+  do que este protótipo promete. Só o cadastro de barreiras (público, versionado) usa
+  `st.cache_resource`. São ~10 consultas por dia; não há desempenho a resolver.
+- **O mapa desenha só as barreiras próximas da rota.** O cadastro real tem megabytes;
+  jogar tudo no Folium trava o navegador.
+- **Com a flag marcada, a rota nem é pedida.** O resultado já está definido, e chamar o
+  roteador seria queimar cota para uma resposta que não muda.
 
 ## Linha de comando
 
@@ -163,6 +200,27 @@ O script já denuncia sozinho os dois sintomas de grafia errada:
 Nada disso substitui **abrir o GeoJSON no geojson.io e olhar**. Uma barreira que não foi
 importada gera silenciosamente um "sem direito" errado, e ninguém vai perceber.
 
+## Validação com casos reais (Marco 6)
+
+```bash
+export ORS_API_KEY="sua-chave"
+python scripts/rodar_casos_conhecidos.py
+```
+
+Lê `testes/casos_conhecidos.csv`, roda cada caso pelo pipeline real e compara com a
+resposta que já se sabe correta. Imprime tudo no terminal e **não grava nada** — o arquivo
+de entrada tem endereços residenciais de crianças. Sai com `0` se todos baterem, `1` em
+divergência, `2` em erro externo.
+
+O CSV está **vazio de casos**, só com o cabeçalho: precisa de 15 a 20 casos da Zona Norte
+cuja resposta correta já se saiba, metade com direito e metade sem. Caso cuja resposta
+ninguém consegue conferir não valida nada. Inclua o CEP desde o início — sem ele, uma falha
+de geocodificação vai parecer falha da regra de negócio.
+
+**Não ajuste o buffer antes de ter esses casos rodando.** Em divergência, investigue: o
+endereço formatado está certo? a rua-barreira do caso está no cadastro com a grafia do OSM?
+A causa quase nunca é o buffer. O script imprime esse lembrete sozinho quando diverge.
+
 ## Detalhes que importam
 
 **Buffer em metros, não em graus.** `.buffer(5)` em geometria WGS84 gera um buffer de
@@ -177,14 +235,18 @@ script exibe a lista em vez de escolher em silêncio.
 
 ## Pendências
 
-- **Rodar o importador numa máquina com acesso ao OSM.** O importador nunca foi executado
-  de verdade: o ambiente onde foi escrito bloqueia `nominatim.openstreetmap.org` e
-  `overpass-api.de`. A conversão Overpass → GeoJSON está coberta por testes com resposta
-  montada à mão, mas a consulta em si só se prova rodando. Até lá, `dados/barreiras.geojson`
-  continua sendo o arquivo feito à mão.
-- Lista real das ruas-barreira, com a grafia usada no OSM (a de hoje é provisória).
-- ID da relação OSM de São Paulo capital — anotar acima na primeira execução.
-- Chave gratuita do OpenRouteService para rodar sem `--offline`.
+Nada aqui é código faltando: são coisas que dependem de rede, de dado real ou de acesso a
+painel, e por isso não puderam ser feitas em ambiente de desenvolvimento.
+
+| O que falta | Bloqueia | Por quê |
+|---|---|---|
+| Rodar o importador numa máquina com acesso ao OSM | cadastro real de barreiras | O ambiente onde foi escrito bloqueia `nominatim.openstreetmap.org` e `overpass-api.de`. A conversão Overpass → GeoJSON tem testes com resposta montada à mão, mas a consulta em si só se prova rodando. Até lá vale o GeoJSON feito à mão. |
+| Lista real das ruas-barreira, com a grafia do OSM | precisão das decisões | A lista de hoje são seis ruas de fronteira escolhidas para teste. |
+| ID da relação OSM de São Paulo capital | nada — descoberto sozinho | Anotar acima na primeira execução do importador, para pular o Nominatim depois. |
+| Chave do OpenRouteService | rodar fora do `--offline` | Nunca foi colada aqui, de propósito. |
+| Uma execução real ponta a ponta | confiança na decisão | Nenhuma consulta de verdade ao ORS foi feita: geocodificação e roteamento estão cobertos por dublês, nunca pelo serviço. |
+| 15–20 casos conhecidos da Zona Norte | Marco 6 | Só quem conhece a região consegue dizer qual é a resposta certa. |
+| Deploy e restrição por e-mail | Marco 5 | Feito no painel do Streamlit Cloud, não pelo repositório. |
 
 ## Deploy (Streamlit Community Cloud)
 
@@ -192,9 +254,22 @@ script exibe a lista em vez de escolher em silêncio.
 |---|---|
 | Repository | `jpshimidt/barreiras-trajeto-mvp` |
 | Branch | `claude/school-transport-sp-app-q14h54` |
-| Main file path | `app.py` — **ainda não existe, é o Marco 4** |
+| Main file path | `app.py` |
 
-A chave vai em Settings → Secrets como `ORS_API_KEY = "..."`, nunca no repositório.
+Passo a passo:
+
+1. `.streamlit/secrets.toml` já está no `.gitignore` — confira antes do push.
+2. Em share.streamlit.io, conectar o GitHub e apontar para o repositório, branch e
+   main file path da tabela acima.
+3. Colar a chave em Settings → Secrets: `ORS_API_KEY = "..."`. Nunca no repositório.
+4. **Restringir o acesso por e-mail** (abaixo) — antes de mandar o link para alguém.
+5. Aguardar o build; o `requirements.txt` é instalado sozinho.
+6. Testar de ponta a ponta pelo link, de outro dispositivo.
+
+Cada push na branch configurada redeploya sozinho.
+
+`.streamlit/config.toml` já vai versionado com `gatherUsageStats = false`: sem telemetria,
+coerente com a promessa de não persistir nada.
 
 **Antes de compartilhar o link:** Settings → Sharing, trocar de público para a lista de
 e-mails autorizados. A página recebe endereços residenciais de crianças e a escola que
@@ -202,8 +277,12 @@ elas frequentam; um app público no `streamlit.app` é indexável e adivinhável
 Quem for testar precisa de conta Google (ou do provedor aceito) para autenticar — avise
 antes de mandar o link, senão a pessoa bate numa tela de login sem entender o motivo.
 
-## Próximos marcos
+## Fora de escopo na v1
 
-4. Interface Streamlit (`app.py` na raiz — é o *main file path* do Streamlit Cloud).
-5. Deploy no Streamlit Community Cloud **com acesso restrito por lista de e-mails**.
-6. Validação com 15–20 casos conhecidos da Zona Norte.
+Registrado para não virar discussão no meio da implementação: processamento em lote,
+banco de dados, cadastro de barreiras pela interface, autenticação própria, lista fixa de
+escolas, outros municípios, barreiras que não sejam ruas, PDF de parecer, histórico de
+consultas e cálculo da rota alternativa que evita barreiras (não altera a decisão).
+
+Se algum virar necessidade, o ponto natural de evolução é trocar o GeoJSON em arquivo por
+Postgres com PostGIS, onde `ST_Intersects` faz a verificação no banco.

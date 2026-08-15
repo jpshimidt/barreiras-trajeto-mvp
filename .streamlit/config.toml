@@ -1,0 +1,14 @@
+# Config da página. NÃO contém segredo — a chave vai em secrets.toml (ignorado
+# pelo Git) ou no painel Settings → Secrets do Streamlit Cloud.
+
+[browser]
+# Nada de telemetria. O protótipo processa endereços residenciais de crianças e
+# a promessa é não sair nada daqui.
+gatherUsageStats = false
+
+[server]
+# Sem upload de arquivo na interface; não há motivo para aceitar corpo grande.
+maxUploadSize = 1
+
+[theme]
+base = "light"

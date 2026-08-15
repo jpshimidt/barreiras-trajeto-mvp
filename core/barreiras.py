@@ -67,6 +67,31 @@ def carregar_barreiras(caminho: str | Path) -> list[Barreira]:
     return barreiras
 
 
+def proximas_da_rota(
+    rota: Rota, barreiras: list[Barreira], margem_graus: float = RAIO_PREFILTRO_GRAUS
+) -> list[Barreira]:
+    """
+    Barreiras cujo bounding box encosta no da rota, com folga.
+
+    Serve a dois propósitos: evitar projetar o cadastro inteiro a cada consulta, e
+    desenhar no mapa só o que está por perto — o GeoJSON real tem megabytes, e jogar
+    tudo no Folium trava o navegador.
+    """
+    minx, miny, maxx, maxy = rota.linha.bounds
+    minx -= margem_graus
+    miny -= margem_graus
+    maxx += margem_graus
+    maxy += margem_graus
+
+    perto = []
+    for barreira in barreiras:
+        bminx, bminy, bmaxx, bmaxy = barreira.geometria.bounds
+        if bmaxx < minx or bminx > maxx or bmaxy < miny or bminy > maxy:
+            continue
+        perto.append(barreira)
+    return perto
+
+
 def barreiras_atingidas(
     rota: Rota, barreiras: list[Barreira], buffer_m: float = BUFFER_M_PADRAO
 ) -> list[Barreira]:
@@ -83,17 +108,8 @@ def barreiras_atingidas(
     crs = crs_utm_local(*rota.linha.centroid.coords[0])
     rota_m = para_metrico(rota.linha, crs)
 
-    minx, miny, maxx, maxy = rota.linha.bounds
-    minx -= RAIO_PREFILTRO_GRAUS
-    miny -= RAIO_PREFILTRO_GRAUS
-    maxx += RAIO_PREFILTRO_GRAUS
-    maxy += RAIO_PREFILTRO_GRAUS
-
     atingidas: list[Barreira] = []
-    for barreira in barreiras:
-        bminx, bminy, bmaxx, bmaxy = barreira.geometria.bounds
-        if bmaxx < minx or bminx > maxx or bmaxy < miny or bminy > maxy:
-            continue
+    for barreira in proximas_da_rota(rota, barreiras):
         area_influencia = para_metrico(barreira.geometria, crs).buffer(buffer_m)
         if rota_m.intersects(area_influencia):
             atingidas.append(barreira)
