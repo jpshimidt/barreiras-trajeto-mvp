@@ -15,10 +15,58 @@ Não existe critério de distância. Andar ao longo da barreira conta igual a at
 **Nada é persistido.** A aplicação processa endereços residenciais de crianças: sem log,
 sem histórico, sem analytics.
 
-## Estado: Marco 1 concluído
+## Estado: Marcos 1 e 2 concluídos
 
-`marco1.py` — script único de linha de comando, endereços fixos no código, três barreiras
-num GeoJSON feito à mão. Imprime a decisão no terminal.
+A lógica mora em `core/`; `marco1.py` é a casca de linha de comando com os endereços fixos.
+
+```
+core/
+├── geo.py         projeção UTM e buffer métrico
+├── barreiras.py   carga do GeoJSON e interseção rota x buffer
+├── geocode.py     endereço -> coordenada, com filtro de município e detecção de ambiguidade
+├── routing.py     coordenadas -> rota a pé
+├── decisao.py     a tabela de decisão, e nada além dela
+├── ors.py         chave da API e tradução de erro HTTP
+└── erros.py       ErroExterno
+testes/
+├── test_decisao.py       38 testes, nenhum toca a rede
+├── conftest.py           bloqueia socket na suíte inteira
+└── casos_conhecidos.csv  só o cabeçalho — aguarda os casos reais (Marco 6)
+```
+
+`decisao.py` não sabe o que é HTTP e `geo.py` não sabe o que é transporte escolar: a
+regra pode ser testada sem chave de API e sem rede.
+
+### Testes
+
+```bash
+python -m pytest          # 38 testes, ~0,3 s
+```
+
+Use `python -m pytest`, não `pytest` direto — em máquina onde o `pytest` do PATH vive num
+ambiente isolado, ele não enxerga o shapely instalado no projeto.
+
+Um `conftest.py` derruba `socket` na suíte inteira: teste que tentar chamar a API falha
+com mensagem explícita. Sem isso, a suíte passaria a depender da cota do ORS e deixaria
+de dizer se a *regra* está certa.
+
+O que os testes cobrem:
+
+- as três linhas da tabela de decisão, incluindo a precedência da flag "escolheu a escola";
+- o corte do buffer em 5 m (4,9 m toca, 5,1 m não toca);
+- rota **paralela** à barreira a 3 m — caminhar ao longo conta igual a atravessar;
+- regressão do buffer em graus: buffer projetado tem área `2rL + πr²`, o em graus tem
+  mais de 1.000 km de largura;
+- avenida fragmentada em vários ways aparece uma vez só no motivo;
+- cadastro de barreiras vazio estoura erro em vez de virar "sem direito" silencioso;
+- candidato de geocodificação em outro município é descartado; scores próximos viram aviso
+  de ambiguidade;
+- resposta do ORS sem rota vira `ErroExterno` — "não sei responder", não "sem direito".
+
+## Linha de comando
+
+`marco1.py` — endereços fixos no código, três barreiras num GeoJSON feito à mão.
+Imprime a decisão no terminal.
 
 ```bash
 pip install -r requirements.txt
@@ -87,7 +135,6 @@ script exibe a lista em vez de escolher em silêncio.
 
 ## Próximos marcos
 
-2. Quebrar em módulos `core/` e escrever `test_decisao.py` com geometrias sintéticas.
 3. `scripts/importar_barreiras.py` (Overpass), com validação visual do GeoJSON.
 4. Interface Streamlit.
 5. Deploy no Streamlit Community Cloud **com acesso restrito por lista de e-mails**.
