@@ -36,7 +36,7 @@ from core.endereco_maps import (
     resolver_geocodificacao,
 )
 from core.google_geo import (
-    autocomplete_sugestoes,
+    buscar_sugestoes_endereco,
     detalhes_place_id,
     extrair_coordenadas_maps_url,
     ler_google_api_key,
@@ -281,9 +281,13 @@ def campo_endereco_busca_google(rotulo: str, chave: str, exemplo: str, api_key: 
                 st.error(str(e))
                 return None
             try:
-                sugestoes = autocomplete_sugestoes(texto_limpo, api_key)
+                sugestoes = buscar_sugestoes_endereco(texto_limpo, api_key)
             except ErroExterno as e:
                 st.error(str(e))
+                st.caption(
+                    "No Google Cloud, habilite **Places API (New)** ou **Geocoding API** "
+                    "para a mesma chave usada em `GOOGLE_MAPS_API_KEY`."
+                )
                 return None
             st.session_state[f"{chave}_sugestoes"] = sugestoes
             st.session_state[cache_busca] = texto_limpo
@@ -302,24 +306,30 @@ def campo_endereco_busca_google(rotulo: str, chave: str, exemplo: str, api_key: 
                     "completo do Google Maps no campo acima."
                 )
             else:
-                opcoes = {s["place_id"]: s["texto"] for s in sugestoes}
-                place_id = st.radio(
+                opcoes = {s["id"]: s for s in sugestoes}
+                escolha_id = st.radio(
                     "Escolha o endereço",
                     list(opcoes.keys()),
-                    format_func=lambda pid: opcoes[pid],
+                    format_func=lambda sid: opcoes[sid]["texto"],
                     key=f"{chave}_escolha_place",
                     index=None,
                 )
-                if place_id:
-                    if st.session_state.get(f"{chave}_place_id") != place_id:
-                        endereco = parse_endereco_maps(texto_limpo)
+                if escolha_id:
+                    if st.session_state.get(f"{chave}_place_id") != escolha_id:
+                        escolhida = opcoes[escolha_id]
                         try:
-                            local = detalhes_place_id(place_id, api_key, texto_limpo, endereco)
+                            if escolhida.get("local") is not None:
+                                local = escolhida["local"]
+                            else:
+                                endereco = parse_endereco_maps(texto_limpo)
+                                local = detalhes_place_id(
+                                    escolhida["place_id"], api_key, texto_limpo, endereco
+                                )
                             exigir_coordenada_em_sao_paulo(local.lat, local.lon)
                         except ErroExterno as e:
                             st.error(str(e))
                             return None
-                        st.session_state[f"{chave}_place_id"] = place_id
+                        st.session_state[f"{chave}_place_id"] = escolha_id
                         st.session_state[f"{chave}_local"] = local
                     local_salvo = st.session_state.get(f"{chave}_local")
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from core.endereco_maps import parse_endereco_maps
+from core.endereco_maps import Local, parse_endereco_maps
 from core.google_geo import (
+    PlacesApiNovaIndisponivel,
+    buscar_sugestoes_endereco,
     extrair_coordenadas_maps_url,
     local_de_selecao_widget,
 )
@@ -49,3 +51,30 @@ def test_local_de_widget_sem_numero_google_nao_confirma():
     assert local.numero_informado == "353"
     assert local.numero_confirmado is False
     assert local.adequacao == 75
+
+
+def test_buscar_sugestoes_cai_para_geocoding_quando_places_nova_indisponivel(monkeypatch):
+    local_legacy = Local(
+        "consulta",
+        "R. Borges, 353 - Parada Inglesa, São Paulo - SP",
+        -23.484,
+        -46.600,
+        1.0,
+        adequacao=100,
+    )
+
+    def autocomplete_falha(*args, **kwargs):
+        raise PlacesApiNovaIndisponivel("403 disabled")
+
+    monkeypatch.setattr("core.google_geo.autocomplete_sugestoes", autocomplete_falha)
+    monkeypatch.setattr(
+        "core.google_geo._geocode_legacy",
+        lambda texto, api_key, endereco: [local_legacy],
+    )
+
+    sugestoes = buscar_sugestoes_endereco("R. Borges, 353", "chave-teste")
+
+    assert len(sugestoes) == 1
+    assert sugestoes[0]["local"] is local_legacy
+    assert sugestoes[0]["place_id"] is None
+    assert "Borges" in sugestoes[0]["texto"]
