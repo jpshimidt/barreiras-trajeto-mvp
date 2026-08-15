@@ -15,7 +15,18 @@ from core.barreiras import Barreira, barreiras_atingidas, carregar_barreiras
 from core.decisao import decidir
 from core.erros import ErroExterno
 from core.geo import crs_utm_local, para_metrico
-from core.geocode import Local, candidatos_ambiguos, extrair_cep, local_de_feature, montar_consulta, parse_endereco_maps
+from core.geocode import (
+    EnderecoMaps,
+    EXEMPLO_ENDERECO_MAPS,
+    Local,
+    candidatos_ambiguos,
+    extrair_cep,
+    local_de_feature,
+    montar_consulta,
+    parse_endereco_maps,
+    pontuar_candidato,
+    resolver_geocodificacao,
+)
 from core.routing import Rota, rota_de_geojson, rota_reta
 
 # Referência em Santana, Zona Norte. 1 grau de latitude ~ 110.574 m nesta faixa.
@@ -287,9 +298,66 @@ def test_cep_extraido_do_formato_maps():
 
 
 def test_parse_endereco_maps_normaliza_espacos():
-    texto, cep = parse_endereco_maps("  Rua   Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000  ")
-    assert texto == "Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000"
-    assert cep == "02247-000"
+    endereco = parse_endereco_maps("  Rua   Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000  ")
+    assert endereco.texto == "Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000"
+    assert endereco.logradouro == "Rua Borges"
+    assert endereco.numero == "353"
+    assert endereco.bairro == "Parada Inglesa"
+    assert endereco.cep == "02247-000"
+
+
+def test_pontuacao_prefere_rua_exata_e_penaliza_homonimo():
+    endereco = EnderecoMaps(
+        texto="Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000",
+        logradouro="Rua Borges",
+        numero="353",
+        bairro="Parada Inglesa",
+        cidade="São Paulo",
+        uf="SP",
+        cep="02247-000",
+    )
+    exato = pontuar_candidato(
+        {
+            "label": "353, Rua Borges, Parada Inglesa, São Paulo",
+            "street": "Rua Borges",
+            "housenumber": "353",
+            "postalcode": "02247-000",
+            "neighbourhood": "Parada Inglesa",
+            "confidence": 0.9,
+        },
+        endereco,
+    )
+    homonimo = pontuar_candidato(
+        {
+            "label": "Rua Borges Ladário, São Paulo",
+            "street": "Rua Borges Ladário",
+            "confidence": 0.9,
+        },
+        endereco,
+    )
+    assert exato > homonimo
+
+
+def test_resolver_escolhe_automaticamente_quando_adequacao_e_clara():
+    texto = "R. Voluntários da Pátria, 1000 - Santana, São Paulo - SP, 02011-000"
+    melhor = Local(texto, "R. Voluntários da Pátria, 1000 — Santana", LAT, LON, 0.95, adequacao=90)
+    outro = Local(texto, "R. Voluntários da Pátria — Perus", LAT, LON, 0.85, adequacao=30)
+    resolucao = resolver_geocodificacao(texto, [melhor, outro])
+
+    assert resolucao.automatico is True
+    assert resolucao.local == melhor
+    assert resolucao.opcoes == ()
+
+
+def test_resolver_obriga_escolha_quando_empata():
+    texto = "Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000"
+    um = Local(texto, "Rua Borges, São Paulo", LAT, LON, 0.9, adequacao=55)
+    dois = Local(texto, "Rua Borges Ladário, São Paulo", LAT, LON, 0.88, adequacao=50)
+    resolucao = resolver_geocodificacao(texto, [um, dois])
+
+    assert resolucao.automatico is False
+    assert resolucao.local is None
+    assert len(resolucao.opcoes) == 2
 
 
 def test_cep_ja_presente_nao_e_duplicado():

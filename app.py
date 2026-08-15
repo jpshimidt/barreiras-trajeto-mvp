@@ -10,7 +10,6 @@ analytics. Os endereços vivem só na sessão do navegador de quem está usando.
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
 import folium
@@ -26,19 +25,16 @@ from core.barreiras import (
 )
 from core.decisao import decidir
 from core.erros import ErroExterno
-from core.geocode import Local, candidatos_ambiguos, geocodificar
+from core.geocode import (
+    EXEMPLO_ENDERECO_MAPS,
+    Local,
+    geocodificar,
+    parse_endereco_maps,
+    resolver_geocodificacao,
+)
 from core.routing import Rota, rota_a_pe
 
 ARQUIVO_BARREIRAS = Path(__file__).parent / "dados" / "barreiras.geojson"
-EXEMPLO_ENDERECO_MAPS = "R. Voluntários da Pátria, 1000 - Santana, São Paulo - SP, 02011-000"
-_CEP_RE = re.compile(r"\b(\d{5})-?(\d{3})\b")
-
-
-def _cep_do_endereco(texto: str) -> str | None:
-    match = _CEP_RE.search(texto)
-    if not match:
-        return None
-    return f"{match.group(1)}-{match.group(2)}"
 
 COR_ROTA = "#1f6feb"
 COR_BARREIRA = "#d1242f"
@@ -134,9 +130,15 @@ def montar_mapa(rota: Rota, casa: Local, escola: Local, atingidas: list[Barreira
 # --------------------------------------------------------------------------- #
 
 
+def _formatar_opcao(local: Local) -> str:
+    if local.adequacao is not None:
+        return f"{local.endereco_formatado} (compatibilidade {local.adequacao})"
+    return local.endereco_formatado
+
+
 def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     """
-    Devolve o `Local` confirmado, ou None enquanto não houver escolha.
+    Devolve o `Local` confirmado, ou None enquanto não houver escolha confiável.
 
     O endereço formatado que o geocodificador entendeu é sempre exibido: um leigo
     bate o olho em "R. das Flores, 120 — Centro" e percebe na hora se o bairro veio
@@ -154,11 +156,21 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     if not texto.strip():
         return None
 
-    cep = _cep_do_endereco(texto)
-    if not cep:
+    endereco = parse_endereco_maps(texto)
+    if not endereco.cep:
         st.warning(
             "Sem CEP no endereço colado. Copie a linha inteira do Google Maps — "
             "o CEP no final ajuda a cair no bairro certo."
+        )
+    elif not endereco.logradouro or not endereco.numero or not endereco.bairro:
+        st.warning(
+            "O formato não parece o do Google Maps. Use: "
+            "rua, número - bairro, São Paulo - SP, CEP."
+        )
+    else:
+        st.caption(
+            f"Entendido como: **{endereco.logradouro}, {endereco.numero}** "
+            f"— {endereco.bairro} — CEP {endereco.cep}"
         )
 
     try:
@@ -167,22 +179,31 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
         st.error(str(e))
         return None
 
-    ambiguos = candidatos_ambiguos(candidatos)
-    if ambiguos:
+    resolucao = resolver_geocodificacao(texto, candidatos)
+    if resolucao.local and resolucao.automatico:
+        escolhido = resolucao.local
+        st.success(f"Encontrado: **{escolhido.endereco_formatado}**")
+    elif resolucao.opcoes:
         st.warning(
-            f"{len(ambiguos) + 1} endereços com pontuação parecida. "
-            "Escolha o que bate com o Google Maps."
+            "Não foi possível escolher sozinho com segurança. "
+            "Selecione o endereço que bate com o Google Maps."
         )
-        opcoes = [candidatos[0], *ambiguos]
         escolhido = st.radio(
             "Qual destes?",
-            opcoes,
-            format_func=lambda local: local.endereco_formatado,
+            resolucao.opcoes,
+            format_func=_formatar_opcao,
             key=f"{chave}_escolha",
+            index=None,
         )
+        if escolhido is None:
+            st.info("Selecione um endereço na lista acima para continuar.")
+            return None
     else:
-        escolhido = candidatos[0]
-        st.success(f"Encontrado: **{escolhido.endereco_formatado}**")
+        st.error(
+            "Nenhum resultado compatível com o endereço colado. "
+            "Confira se copiou a linha inteira do Google Maps."
+        )
+        return None
 
     st.caption(f"Coordenada: {escolhido.lat:.6f}, {escolhido.lon:.6f}")
     return escolhido
