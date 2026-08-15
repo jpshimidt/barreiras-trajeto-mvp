@@ -435,10 +435,15 @@ def geocodificar(texto: str, api_key: str | None = None, cep: str | None = None)
     """
     Candidatos ordenados por adequação ao endereço colado.
 
-    Usa Nominatim (OpenStreetMap) como fonte principal — funciona melhor para
-  endereços brasileiros colados do Google Maps. ORS/Pelias entra só como
-    reforço quando o Nominatim não devolve nada útil.
+    Com `GOOGLE_MAPS_API_KEY` configurada, usa Google Places. Caso contrário,
+    Nominatim/Photon/ORS (OpenStreetMap).
     """
+    from core.google_geo import geocodificar_google, ler_google_api_key
+
+    google_key = ler_google_api_key()
+    if google_key:
+        return geocodificar_google(texto, google_key)
+
     from core.nominatim_geo import NominatimRateLimited, buscar_nominatim, consultas_nominatim
 
     endereco = parse_endereco_maps(texto)

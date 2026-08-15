@@ -37,6 +37,7 @@ def rota_entre(a: Local, b: Local) -> Rota:
 def app(monkeypatch):
     """Página com chave de brinquedo e serviços externos dublados."""
     monkeypatch.setenv("ORS_API_KEY", "chave-de-teste")
+    monkeypatch.setattr("core.auth_app.exigir_login", lambda: True)
 
     def geocode_falso(texto, api_key, cep=None):
         if "voluntários" in texto.lower():

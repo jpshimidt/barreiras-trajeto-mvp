@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="https://unpkg.com/streamlit-component-lib@2.0.0/dist/index.js"></script>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Source Sans Pro", sans-serif;
+      }
+      #pac-input {
+        width: 100%;
+        padding: 0.6rem 0.75rem;
+        font-size: 1rem;
+        border: 1px solid rgb(49, 51, 63, 0.2);
+        border-radius: 0.5rem;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <input id="pac-input" type="text" autocomplete="off" />
+    <script>
+      const input = document.getElementById("pac-input");
+      let autocomplete = null;
+      let mapsLoaded = false;
+      let pendingKey = null;
+
+      function sendValue(value) {
+        Streamlit.setComponentValue(value);
+      }
+
+      function initAutocomplete() {
+        if (autocomplete || !window.google || !google.maps || !google.maps.places) {
+          return;
+        }
+        autocomplete = new google.maps.places.Autocomplete(input, {
+          componentRestrictions: { country: "br" },
+          fields: ["formatted_address", "geometry", "address_components", "name"],
+          types: ["address"],
+        });
+        autocomplete.addListener("place_changed", () => {
+          const place = autocomplete.getPlace();
+          if (!place.geometry || !place.geometry.location) {
+            return;
+          }
+          let numero = "";
+          let rua = "";
+          (place.address_components || []).forEach((c) => {
+            if (c.types.includes("street_number")) numero = c.long_name;
+            if (c.types.includes("route")) rua = c.long_name;
+          });
+          sendValue({
+            formatted_address: place.formatted_address || "",
+            lat: place.geometry.location.lat(),
+            lon: place.geometry.location.lng(),
+            street: rua,
+            number: numero,
+          });
+        });
+      }
+
+      function loadMaps(apiKey) {
+        if (mapsLoaded || !apiKey) return;
+        mapsLoaded = true;
+        const script = document.createElement("script");
+        script.src =
+          "https://maps.googleapis.com/maps/api/js?key=" +
+          encodeURIComponent(apiKey) +
+          "&libraries=places&language=pt-BR&region=BR&callback=onMapsReady";
+        script.async = true;
+        document.head.appendChild(script);
+      }
+
+      window.onMapsReady = function () {
+        initAutocomplete();
+      };
+
+      function onRender(event) {
+        const data = event.detail.args;
+        if (data.placeholder) {
+          input.placeholder = data.placeholder;
+        }
+        if (data.default && !input.value) {
+          input.value = data.default;
+        }
+        if (data.api_key && data.api_key !== pendingKey) {
+          pendingKey = data.api_key;
+          loadMaps(data.api_key);
+        }
+        if (window.google && google.maps && google.maps.places) {
+          initAutocomplete();
+        }
+        Streamlit.setFrameHeight(52);
+      }
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+      Streamlit.setComponentReady();
+    </script>
+  </body>
+</html>

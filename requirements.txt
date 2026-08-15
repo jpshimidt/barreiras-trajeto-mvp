@@ -7,3 +7,4 @@ pyproj
 streamlit
 folium
 streamlit-folium
+streamlit-authenticator>=0.4.0

@@ -25,6 +25,7 @@ from core.barreiras import (
 )
 from core.decisao import decidir
 from core.erros import ErroExterno
+from core.auth_app import exigir_login
 from core.endereco_maps import (
     EXEMPLO_ENDERECO_MAPS,
     Local,
@@ -32,7 +33,17 @@ from core.endereco_maps import (
     parse_endereco_maps,
     resolver_geocodificacao,
 )
+from core.google_geo import (
+    extrair_coordenadas_maps_url,
+    ler_google_api_key,
+    local_de_selecao_widget,
+)
 from core.routing import Rota, rota_a_pe
+
+try:
+    from components.google_places import google_places_input
+except ImportError:
+    google_places_input = None  # type: ignore[misc, assignment]
 
 ARQUIVO_BARREIRAS = Path(__file__).parent / "dados" / "barreiras.geojson"
 
@@ -163,13 +174,7 @@ def _fingerprint_calculo(
             return None
         return (local.endereco_formatado, round(local.lat, 6), round(local.lon, 6))
 
-    return (
-        st.session_state.get("casa_texto", ""),
-        st.session_state.get("escola_texto", ""),
-        _pin(casa),
-        _pin(escola),
-        escolheu,
-    )
+    return (_pin(casa), _pin(escola), escolheu)
 
 
 def _limpar_resultado_se_entrada_mudou(
@@ -182,7 +187,68 @@ def _limpar_resultado_se_entrada_mudou(
         del st.session_state["resultado_salvo"]
 
 
-def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
+def campo_endereco_google(rotulo: str, chave: str, exemplo: str, api_key: str) -> Local | None:
+    """Busca endereço com autocomplete do Google (sem sair do app)."""
+    st.markdown(f"**{rotulo}**")
+    if google_places_input is None:
+        st.error("Componente Google Places indisponível.")
+        return None
+
+    selecao = google_places_input(
+        api_key,
+        placeholder=exemplo,
+        key=f"{chave}_places",
+    )
+
+    with st.expander("Ou cole o link do Google Maps"):
+        link = st.text_input(
+            "Link compartilhado",
+            key=f"{chave}_link",
+            placeholder="https://maps.google.com/...",
+        )
+        if link.strip():
+            coords = extrair_coordenadas_maps_url(link.strip())
+            if coords:
+                lat, lon = coords
+                st.caption(f"Coordenadas do link: {lat:.6f}, {lon:.6f}")
+                if st.button("Usar este pin do link", key=f"{chave}_usar_link"):
+                    local = Local(
+                        texto_original=link.strip(),
+                        endereco_formatado=link.strip(),
+                        lat=lat,
+                        lon=lon,
+                        confianca=1.0,
+                        adequacao=80,
+                        numero_informado=None,
+                        numero_confirmado=True,
+                    )
+                    st.session_state[f"{chave}_local"] = local
+            else:
+                st.warning("Não foi possível ler coordenadas deste link.")
+
+    local_salvo = st.session_state.get(f"{chave}_local")
+    if selecao:
+        chave_sel = (
+            selecao.get("formatted_address"),
+            round(float(selecao["lat"]), 6),
+            round(float(selecao["lon"]), 6),
+        )
+        if st.session_state.get(f"{chave}_sel") != chave_sel:
+            st.session_state[f"{chave}_sel"] = chave_sel
+            st.session_state[f"{chave}_local"] = local_de_selecao_widget(selecao)
+        local_salvo = st.session_state[f"{chave}_local"]
+
+    if not local_salvo:
+        st.info("Digite o endereço e escolha uma sugestão do Google, ou use um link do Maps.")
+        return None
+
+    st.success(f"Encontrado: **{local_salvo.endereco_formatado}**")
+    _aviso_numero_nao_confirmado(local_salvo)
+    st.caption(f"Coordenada: {local_salvo.lat:.6f}, {local_salvo.lon:.6f}")
+    return local_salvo
+
+
+def campo_endereco_colado(rotulo: str, chave: str, exemplo: str) -> Local | None:
     """
     Devolve o `Local` confirmado, ou None enquanto não houver escolha confiável.
 
@@ -267,18 +333,24 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     return escolhido
 
 
+def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
+    api_key = ler_google_api_key()
+    if api_key and google_places_input is not None:
+        return campo_endereco_google(rotulo, chave, exemplo, api_key)
+    return campo_endereco_colado(rotulo, chave, exemplo)
+
+
 # --------------------------------------------------------------------------- #
 # Página
 # --------------------------------------------------------------------------- #
 
 
-def main() -> None:
+def pagina_principal() -> None:
     st.title("🚌 Elegibilidade a transporte escolar")
     st.caption(
-        "Município de São Paulo. Cole os endereços como no Google Maps. "
+        "Município de São Paulo. Busque o endereço no campo (Google) ou cole como no Maps. "
         "A criança tem direito quando o menor caminho a pé até a escola encosta "
-        "em alguma rua cadastrada como barreira. "
-        "_Geocodificação via OpenStreetMap._"
+        "em alguma rua cadastrada como barreira."
     )
 
     with st.sidebar:
@@ -401,6 +473,11 @@ def mostrar_resultado(resultado) -> None:
         st.markdown("**Barreiras no caminho:**")
         for nome in resultado.barreiras_atingidas:
             st.markdown(f"- {nome}")
+
+
+def main() -> None:
+    exigir_login()
+    pagina_principal()
 
 
 if __name__ == "__main__":
