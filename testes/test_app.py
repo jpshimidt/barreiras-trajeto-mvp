@@ -53,9 +53,9 @@ def app(monkeypatch):
 
 def _clicar_buscar_enderecos(at: AppTest) -> AppTest:
     for btn in at.button:
-        if btn.label and "Buscar endereço" in btn.label:
-            btn.click()
-    return at.run()
+        if btn.label and ("Buscar endereço" in btn.label or "Buscar sugestões" in btn.label):
+            btn.click().run()
+    return at
 
 
 def _clicar_calcular(at: AppTest) -> AppTest:
@@ -66,10 +66,23 @@ def _clicar_calcular(at: AppTest) -> AppTest:
     return at.run()
 
 
+def _preencher_campo_endereco(at: AppTest, chave: str, valor: str) -> AppTest:
+    for campo in at.text_input:
+        if campo.key == f"{chave}_texto":
+            campo.set_value(valor)
+            break
+    else:
+        raise AssertionError(f"Campo {chave}_texto não encontrado")
+    return at.run()
+
+
 def preencher(at: AppTest) -> AppTest:
-    at.text_input[0].set_value(EXEMPLO_ENDERECO_MAPS)
-    at.text_input[1].set_value("Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000")
-    at = at.run()
+    at = _preencher_campo_endereco(at, "casa", EXEMPLO_ENDERECO_MAPS)
+    at = _preencher_campo_endereco(
+        at,
+        "escola",
+        "Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000",
+    )
     return _clicar_buscar_enderecos(at)
 
 
@@ -185,9 +198,8 @@ def test_falha_do_ors_nao_vira_sem_direito(app, monkeypatch):
 
 def test_sem_cep_avisa(app):
     at = app.run()
-    at.text_input[0].set_value("Rua Borges, 353 - Parada Inglesa, São Paulo - SP")
-    at.text_input[1].set_value("R. da Grota, 483 - Vila Gustavo, São Paulo - SP")
-    at = at.run()
+    at = _preencher_campo_endereco(at, "casa", "Rua Borges, 353 - Parada Inglesa, São Paulo - SP")
+    at = _preencher_campo_endereco(at, "escola", "R. da Grota, 483 - Vila Gustavo, São Paulo - SP")
 
     assert any("CEP" in w.value for w in at.warning)
 
