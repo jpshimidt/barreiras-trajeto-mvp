@@ -42,6 +42,25 @@ def _config_auth() -> dict[str, Any] | None:
         return None
 
 
+def _normalizar_senha(senha: Any) -> str:
+    """Hash bcrypt como string sem espaços — evita falha silenciosa no login."""
+    if isinstance(senha, (list, tuple)) and senha:
+        senha = senha[0]
+    return str(senha or "").strip()
+
+
+def _normalizar_usuario(dados: Any) -> dict[str, Any]:
+    usuario = _to_plain_dict(dados)
+    if not isinstance(usuario, dict):
+        return {}
+    if "password" in usuario:
+        usuario["password"] = _normalizar_senha(usuario["password"])
+    for campo in ("email", "name"):
+        if campo in usuario and usuario[campo] is not None:
+            usuario[campo] = str(usuario[campo]).strip()
+    return usuario
+
+
 def _credenciais_mutaveis() -> dict[str, Any]:
     """Credenciais desacopladas de st.secrets para o streamlit-authenticator."""
     try:
@@ -58,7 +77,7 @@ def _credenciais_mutaveis() -> dict[str, Any]:
 
     return {
         "usernames": {
-            str(usuario): _to_plain_dict(dados)
+            str(usuario).strip().lower(): _normalizar_usuario(dados)
             for usuario, dados in usernames.items()
         }
     }
@@ -142,7 +161,24 @@ def exigir_login() -> bool:
         auto_hash=False,
     )
 
-    authenticator.login(location="main", key="login_form")
+    usernames_cadastrados = sorted(credenciais.get("usernames", {}).keys())
+    if usernames_cadastrados:
+        exemplos = ", ".join(f"`{u}`" for u in usernames_cadastrados[:3])
+        st.caption(
+            f"Use o **usuário** ({exemplos}), não o e-mail. "
+            "Digite a **senha normal** — o hash bcrypt fica só nos Secrets."
+        )
+
+    authenticator.login(
+        location="main",
+        key="login_form",
+        fields={
+            "Form name": "Entrar",
+            "Username": "Usuário (não use e-mail)",
+            "Password": "Senha",
+            "Login": "Entrar",
+        },
+    )
 
     autenticado_agora = bool(st.session_state.get("authentication_status"))
     if autenticado_antes and not autenticado_agora:
@@ -160,7 +196,10 @@ def exigir_login() -> bool:
         except Exception as e:
             st.error(str(e))
             st.stop()
-        st.error("Usuário ou senha incorretos.")
+        st.error(
+            "Usuário ou senha incorretos. "
+            "Confira o **usuário** (ex.: admin, não o e-mail) e a senha em texto normal."
+        )
     else:
         st.info("Faça login para usar a consulta de elegibilidade.")
     st.stop()
