@@ -227,7 +227,8 @@ def main() -> None:
     st.caption(
         "Município de São Paulo. Cole os endereços como no Google Maps. "
         "A criança tem direito quando o menor caminho a pé até a escola encosta "
-        "em alguma rua cadastrada como barreira."
+        "em alguma rua cadastrada como barreira. "
+        "_Geocodificação via OpenStreetMap._"
     )
 
     with st.sidebar:
