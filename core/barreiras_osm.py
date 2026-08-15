@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import unicodedata
@@ -24,15 +25,25 @@ from core.ors import TIMEOUT_S
 
 MUNICIPIO = "São Paulo"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
-OVERPASS = "https://overpass-api.de/api/interpreter"
+NOMINATIM_LOOKUP = "https://nominatim.openstreetmap.org/lookup"
+OVERPASS_ENDPOINTS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
+)
 USER_AGENT = "barreiras-trajeto-mvp/0.1 (cadastro de barreiras)"
 
 # Relação OSM de São Paulo capital (admin_level=8) — constante documentada no README.
 RELACAO_SP_PADRAO = 298285
 
-TIMEOUT_CONSULTA_S = 180
-TIMEOUT_OVERPASS_S = 120
-TENTATIVAS = 4
+TIMEOUT_CONSULTA_S = (8, 45)
+TIMEOUT_OVERPASS_S = 40
+TENTATIVAS = 2
+DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
+
+class OverpassIndisponivel(ErroExterno):
+    """Nenhum mirror Overpass respondeu — o chamador pode usar Nominatim."""
+
 
 TIPOS_OSM = {
     "motorway": "rodovia",
@@ -245,6 +256,30 @@ def ruas_sem_resultado(pedidas: list[str], geojson: dict) -> list[str]:
     return faltando
 
 
+def ler_overpass_urls() -> list[str]:
+    """URLs Overpass: secret/env ``OVERPASS_URL`` primeiro, depois mirrors públicos."""
+    custom: list[str] = []
+    try:
+        import streamlit as st
+
+        if "OVERPASS_URL" in st.secrets:
+            url = str(st.secrets["OVERPASS_URL"]).strip()
+            if url:
+                custom.append(url)
+    except Exception:
+        pass
+    env = os.environ.get("OVERPASS_URL", "").strip()
+    if env and env not in custom:
+        custom.append(env)
+    vistos: set[str] = set()
+    urls: list[str] = []
+    for url in [*custom, *OVERPASS_ENDPOINTS]:
+        if url not in vistos:
+            vistos.add(url)
+            urls.append(url)
+    return urls
+
+
 def descobrir_relacao_sp(sessao: requests.Session) -> int:
     resp = sessao.get(
         NOMINATIM,
@@ -272,25 +307,352 @@ def descobrir_relacao_sp(sessao: requests.Session) -> int:
 
 
 def consultar_overpass(sessao: requests.Session, consulta: str) -> dict:
-    espera = 5
-    for tentativa in range(1, TENTATIVAS + 1):
+    """Consulta Overpass tentando mirrors em sequência."""
+    erros: list[str] = []
+    for url in ler_overpass_urls():
+        espera = 5
+        for tentativa in range(1, TENTATIVAS + 1):
+            try:
+                resp = sessao.post(
+                    url,
+                    data={"data": consulta},
+                    timeout=TIMEOUT_CONSULTA_S,
+                    headers={"User-Agent": USER_AGENT},
+                )
+            except requests.RequestException as e:
+                erros.append(f"{url}: rede ({type(e).__name__})")
+                break
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code in (429, 504) and tentativa < TENTATIVAS:
+                time.sleep(espera)
+                espera *= 2
+                continue
+            erros.append(f"{url}: HTTP {resp.status_code}")
+            break
+    resumo = "; ".join(erros[:4])
+    if len(erros) > 4:
+        resumo += f"; … (+{len(erros) - 4} mirrors)"
+    raise OverpassIndisponivel(
+        "Overpass indisponível em todos os mirrors. "
+        f"Tentativas: {resumo or 'nenhuma URL configurada'}"
+    )
+
+
+def _coords_de_geometria_nominatim(geometria: dict) -> list[tuple[float, float]] | None:
+    tipo = geometria.get("type")
+    coords_bruto = geometria.get("coordinates")
+    if not coords_bruto:
+        return None
+    if tipo == "LineString":
+        linhas = [coords_bruto]
+    elif tipo == "MultiLineString":
+        linhas = coords_bruto
+    elif tipo == "Polygon":
+        linhas = [coords_bruto[0]]
+    else:
+        return None
+    if not linhas:
+        return None
+    melhor = max(linhas, key=len)
+    if len(melhor) < 2:
+        return None
+    return [(float(lon), float(lat)) for lon, lat in melhor]
+
+
+def feature_de_nominatim(
+    feature: dict,
+    importado_em: str,
+    trecho: RegistroTrecho | None = None,
+) -> dict | None:
+    coords = _coords_de_geometria_nominatim(feature.get("geometry") or {})
+    if not coords:
+        return None
+
+    props_osm = feature.get("properties") or {}
+    tags = props_osm.get("tags") or {}
+    nome = (
+        tags.get("name")
+        or props_osm.get("name")
+        or props_osm.get("display_name")
+        or (trecho.nome if trecho else None)
+        or "(sem nome)"
+    )
+    osm_id = props_osm.get("osm_id") or props_osm.get("place_id")
+    highway = tags.get("highway") or props_osm.get("type") or ""
+    tipo_via = TIPOS_OSM.get(highway, highway or "(sem tipo)")
+
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": [list(c) for c in coords]},
+        "properties": {
+            "id": f"{slug(nome)}-nominatim-{osm_id or slug(nome)}",
+            "nome": nome,
+            "tipo": tipo_via,
+            "municipio": MUNICIPIO,
+            "origem": "nominatim",
+            "importado_em": importado_em,
+        },
+    }
+
+
+def _nominatim_candidato_relevante(resultado: dict, nome_alvo: str) -> bool:
+    addr = resultado.get("address") or {}
+    display = (resultado.get("display_name") or "").lower()
+    if MUNICIPIO.lower() not in display and not any(
+        MUNICIPIO.lower() in str(addr.get(c) or "").lower()
+        for c in ("city", "town", "municipality", "county", "state")
+    ):
+        return False
+    if resultado.get("class") == "highway":
+        return True
+    road = (addr.get("road") or "").lower()
+    alvo = nome_alvo.lower()
+    return bool(road and (alvo in road or road in alvo))
+
+
+def _osm_id_lookup(resultado: dict) -> str | None:
+    tipo = (resultado.get("osm_type") or "").lower()
+    osm_id = resultado.get("osm_id")
+    if not osm_id:
+        return None
+    prefix = {"node": "N", "way": "W", "relation": "R"}.get(tipo)
+    if not prefix:
+        return None
+    return f"{prefix}{osm_id}"
+
+
+def buscar_features_nominatim(
+    sessao: requests.Session,
+    nome: str,
+    trecho: RegistroTrecho | None = None,
+) -> list[dict]:
+    """Fallback quando Overpass está bloqueado — geometria via Nominatim lookup."""
+    importado_em = date.today().isoformat()
+    consultas = [
+        f"{nome}, {MUNICIPIO}, SP, Brasil",
+        nome,
+    ]
+    osm_ids: list[str] = []
+    vistos: set[str] = set()
+    for consulta in consultas:
         try:
-            resp = sessao.post(
-                OVERPASS,
-                data={"data": consulta},
-                timeout=TIMEOUT_CONSULTA_S,
+            resp = sessao.get(
+                NOMINATIM,
+                params={
+                    "q": consulta,
+                    "format": "json",
+                    "limit": 8,
+                    "countrycodes": "br",
+                    "addressdetails": 1,
+                },
+                timeout=60,
                 headers={"User-Agent": USER_AGENT},
             )
         except requests.RequestException as e:
-            raise ErroExterno(f"Overpass falhou na rede: {e}") from e
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code in (429, 504) and tentativa < TENTATIVAS:
-            time.sleep(espera)
-            espera *= 2
+            raise ErroExterno(f"Nominatim falhou na rede: {e}") from e
+        if resp.status_code != 200:
             continue
-        raise ErroExterno(f"Overpass respondeu HTTP {resp.status_code}: {resp.text[:300]}")
-    raise ErroExterno("Overpass não respondeu depois de várias tentativas.")
+        for item in resp.json():
+            if not _nominatim_candidato_relevante(item, nome):
+                continue
+            oid = _osm_id_lookup(item)
+            if oid and oid not in vistos:
+                vistos.add(oid)
+                osm_ids.append(oid)
+        if osm_ids:
+            break
+
+    if not osm_ids:
+        return []
+
+    try:
+        resp = sessao.get(
+            NOMINATIM_LOOKUP,
+            params={
+                "osm_ids": ",".join(osm_ids[:10]),
+                "format": "geojson",
+                "polygon_geojson": 1,
+            },
+            timeout=60,
+            headers={"User-Agent": USER_AGENT},
+        )
+    except requests.RequestException as e:
+        raise ErroExterno(f"Nominatim lookup falhou na rede: {e}") from e
+    if resp.status_code != 200:
+        raise ErroExterno(f"Nominatim lookup respondeu HTTP {resp.status_code}")
+
+    colecao = resp.json()
+    features: list[dict] = []
+    alvo = (trecho.nome if trecho else nome).lower()
+    for feature in colecao.get("features") or []:
+        props = feature.get("properties") or {}
+        nome_feat = (
+            (props.get("tags") or {}).get("name")
+            or props.get("name")
+            or props.get("display_name")
+            or ""
+        ).lower()
+        if nome_feat and alvo not in nome_feat and nome_feat not in alvo:
+            continue
+        convertida = feature_de_nominatim(feature, importado_em, trecho)
+        if convertida:
+            features.append(convertida)
+    return features
+
+
+def decodificar_polyline(encoded: str) -> list[tuple[float, float]]:
+    """Polyline do Google Directions → [(lon, lat), ...]."""
+    coords: list[tuple[float, float]] = []
+    index = lat = lng = 0
+    while index < len(encoded):
+        for eixo in ("lat", "lng"):
+            shift = result = 0
+            while True:
+                byte = ord(encoded[index]) - 63
+                index += 1
+                result |= (byte & 0x1F) << shift
+                shift += 5
+                if byte < 0x20:
+                    break
+            delta = ~(result >> 1) if result & 1 else (result >> 1)
+            if eixo == "lat":
+                lat += delta
+            else:
+                lng += delta
+        coords.append((lng / 1e5, lat / 1e5))
+    return coords
+
+
+def feature_de_linha(
+    coords: list[tuple[float, float]],
+    nome: str,
+    *,
+    origem: str,
+    tipo: str = "rua",
+    importado_em: str | None = None,
+) -> dict | None:
+    if len(coords) < 2:
+        return None
+    importado_em = importado_em or date.today().isoformat()
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": [list(c) for c in coords]},
+        "properties": {
+            "id": f"{slug(nome)}-{origem}",
+            "nome": nome,
+            "tipo": tipo,
+            "municipio": MUNICIPIO,
+            "origem": origem,
+            "importado_em": importado_em,
+        },
+    }
+
+
+def _pontos_google_para_rota(
+    api_key: str, nome: str, trecho: RegistroTrecho | None
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Dois pontos (lat, lon) nas extremidades da via, via Geocoding."""
+    from core.google_geo import GEOCODE_URL
+
+    if trecho and trecho.tem_faixa():
+        consultas = [
+            f"{nome}, {trecho.numero_inicio}, {MUNICIPIO}, SP, Brasil",
+            f"{nome}, {trecho.numero_fim}, {MUNICIPIO}, SP, Brasil",
+        ]
+    else:
+        consultas = [
+            f"{nome}, 1, {MUNICIPIO}, SP, Brasil",
+            f"{nome}, 2500, {MUNICIPIO}, SP, Brasil",
+        ]
+
+    pontos: list[tuple[float, float]] = []
+    for consulta in consultas:
+        try:
+            resp = requests.get(
+                GEOCODE_URL,
+                params={
+                    "address": consulta,
+                    "key": api_key,
+                    "components": "country:BR|administrative_area:SP|locality:São Paulo",
+                    "language": "pt-BR",
+                },
+                timeout=TIMEOUT_S,
+            )
+        except requests.RequestException:
+            return None
+        if resp.status_code != 200:
+            return None
+        dados = resp.json()
+        if dados.get("status") != "OK":
+            return None
+        loc = ((dados.get("results") or [{}])[0].get("geometry") or {}).get("location") or {}
+        if loc.get("lat") is None or loc.get("lng") is None:
+            return None
+        pontos.append((float(loc["lat"]), float(loc["lng"])))
+
+    if len(pontos) != 2:
+        return None
+    if pontos[0] == pontos[1]:
+        return None
+    return pontos[0], pontos[1]
+
+
+def buscar_features_google_rota(
+    nome: str,
+    trecho: RegistroTrecho | None = None,
+    tipo: str | None = None,
+) -> list[dict]:
+    """Fallback no Streamlit Cloud: traçado da via via Google Directions."""
+    from core.google_geo import ler_google_api_key
+
+    api_key = ler_google_api_key()
+    if not api_key:
+        return []
+
+    extremos = _pontos_google_para_rota(api_key, nome, trecho)
+    if not extremos:
+        return []
+    origem, destino = extremos
+    try:
+        resp = requests.get(
+            DIRECTIONS_URL,
+            params={
+                "origin": f"{origem[0]},{origem[1]}",
+                "destination": f"{destino[0]},{destino[1]}",
+                "mode": "driving",
+                "region": "br",
+                "language": "pt-BR",
+                "key": api_key,
+            },
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException as e:
+        raise ErroExterno(f"Google Directions falhou na rede: {e}") from e
+    if resp.status_code != 200:
+        return []
+    dados = resp.json()
+    if dados.get("status") != "OK":
+        return []
+    rotas = dados.get("routes") or []
+    if not rotas:
+        return []
+    encoded = ((rotas[0].get("overview_polyline") or {}).get("points")) or ""
+    coords = decodificar_polyline(encoded)
+    tipo_via = _normalizar_tipo(tipo) or "rua"
+    feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
+    return [feature] if feature else []
+
+
+def _features_fallback(sessao: requests.Session, nome: str, trecho: RegistroTrecho, tipo: str | None) -> list[dict]:
+    """Nominatim e, se falhar, Google Directions — usado quando Overpass está bloqueado."""
+    try:
+        features = buscar_features_nominatim(sessao, nome, trecho)
+    except ErroExterno:
+        features = []
+    if features:
+        return features
+    return buscar_features_google_rota(nome, trecho, tipo)
 
 
 def _features_para_barreiras(features: list[dict]) -> list[Barreira]:
@@ -339,20 +701,24 @@ def buscar_barreiras_rua(
 
     sessao = requests.Session()
     consulta = montar_consulta([nome], relacao_id, regex=regex)
-    resposta = consultar_overpass(sessao, consulta)
+    features: list[dict]
+    try:
+        resposta = consultar_overpass(sessao, consulta)
 
-    way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
-    marcas_por_way: dict[int, list[MarcaNumero]] = {}
-    if way_ids and trecho.tem_faixa():
-        consulta_nums = montar_consulta_numeros(way_ids)
-        if consulta_nums:
-            resp_nums = consultar_overpass(sessao, consulta_nums)
-            marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
+        way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
+        marcas_por_way: dict[int, list[MarcaNumero]] = {}
+        if way_ids and trecho.tem_faixa():
+            consulta_nums = montar_consulta_numeros(way_ids)
+            if consulta_nums:
+                resp_nums = consultar_overpass(sessao, consulta_nums)
+                marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
 
-    geojson = overpass_para_geojson(
-        resposta, trechos=[trecho], marcas_por_way=marcas_por_way
-    )
-    features = geojson.get("features") or []
+        geojson = overpass_para_geojson(
+            resposta, trechos=[trecho], marcas_por_way=marcas_por_way
+        )
+        features = geojson.get("features") or []
+    except OverpassIndisponivel:
+        features = _features_fallback(sessao, nome, trecho, tipo)
 
     if not features and not regex:
         return buscar_barreiras_rua(
