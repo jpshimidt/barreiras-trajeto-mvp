@@ -390,7 +390,7 @@ def _locais_de_resultados(
     return locais
 
 
-def geocodificar(texto: str, api_key: str, cep: str | None = None) -> list[Local]:
+def geocodificar(texto: str, api_key: str | None = None, cep: str | None = None) -> list[Local]:
     """
     Candidatos ordenados por adequação ao endereço colado.
 
@@ -406,7 +406,10 @@ def geocodificar(texto: str, api_key: str, cep: str | None = None) -> list[Local
     locais: list[Local] = []
 
     for q in consultas_nominatim(endereco) or [consulta]:
-        for item in buscar_nominatim(q):
+        import streamlit as st
+        items = buscar_nominatim(q)
+        st.write(f"DEBUG: Consulta '{q[:50]}...' retornou {len(items)} items do Nominatim")
+        for item in items:
             for local in _locais_de_resultados([item], q, endereco, origem="nominatim"):
                 chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
                 if chave in vistos:
@@ -418,10 +421,12 @@ def geocodificar(texto: str, api_key: str, cep: str | None = None) -> list[Local
     if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:
         return locais
 
-    features = _buscar_ors(consulta, api_key, endereco.cep)
-    alternativa = _consulta_alternativa(endereco)
-    if alternativa and alternativa != consulta:
-        features.extend(_buscar_ors(alternativa, api_key, endereco.cep))
+    features: list[dict] = []
+    if api_key:
+        features = _buscar_ors(consulta, api_key, endereco.cep)
+        alternativa = _consulta_alternativa(endereco)
+        if alternativa and alternativa != consulta:
+            features.extend(_buscar_ors(alternativa, api_key, endereco.cep))
 
     for feature in features:
         for local in _locais_de_resultados([feature], consulta, endereco, origem="ors"):
