@@ -139,9 +139,47 @@ def montar_mapa(rota: Rota, casa: Local, escola: Local, atingidas: list[Barreira
 
 
 def _formatar_opcao(local: Local) -> str:
+    texto = local.endereco_formatado
     if local.adequacao is not None:
-        return f"{local.endereco_formatado} (compatibilidade {local.adequacao})"
-    return local.endereco_formatado
+        texto = f"{texto} (compatibilidade {local.adequacao})"
+    if local.numero_informado and not local.numero_confirmado:
+        texto = f"{texto} — ⚠️ sem confirmação do nº {local.numero_informado}"
+    return texto
+
+
+def _aviso_numero_nao_confirmado(local: Local) -> None:
+    if local.numero_informado and not local.numero_confirmado:
+        st.warning(
+            f"O sistema localizou a rua, mas **não confirmou o número {local.numero_informado}**. "
+            "O pin pode cair no meio da via, não na porta — confira no mapa depois de calcular."
+        )
+
+
+def _fingerprint_calculo(
+    casa: Local | None, escola: Local | None, escolheu: bool
+) -> tuple:
+    def _pin(local: Local | None) -> tuple | None:
+        if local is None:
+            return None
+        return (local.endereco_formatado, round(local.lat, 6), round(local.lon, 6))
+
+    return (
+        st.session_state.get("casa_texto", ""),
+        st.session_state.get("escola_texto", ""),
+        _pin(casa),
+        _pin(escola),
+        escolheu,
+    )
+
+
+def _limpar_resultado_se_entrada_mudou(
+    casa: Local | None, escola: Local | None, escolheu: bool
+) -> None:
+    salvo = st.session_state.get("resultado_salvo")
+    if not salvo:
+        return
+    if _fingerprint_calculo(casa, escola, escolheu) != salvo.get("fingerprint"):
+        del st.session_state["resultado_salvo"]
 
 
 def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
@@ -201,6 +239,7 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     if resolucao.local and resolucao.automatico:
         escolhido = resolucao.local
         st.success(f"Encontrado: **{escolhido.endereco_formatado}**")
+        _aviso_numero_nao_confirmado(escolhido)
     elif resolucao.opcoes:
         st.warning(
             "Não foi possível escolher sozinho com segurança. "
@@ -216,6 +255,7 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
         if escolhido is None:
             st.info("Selecione um endereço na lista acima para continuar.")
             return None
+        _aviso_numero_nao_confirmado(escolhido)
     else:
         st.error(
             "Nenhum resultado compatível com o endereço colado. "
@@ -283,39 +323,67 @@ def main() -> None:
     st.divider()
     escolheu = st.checkbox(
         "A responsável escolheu esta escola",
+        key="escolheu_escola",
         help="Quando a escola foi escolhida pela responsável, não há direito a transporte, "
         "independentemente do trajeto.",
     )
 
+    _limpar_resultado_se_entrada_mudou(casa, escola, escolheu)
+
     calcular = st.button("Calcular", type="primary", disabled=not (casa and escola))
-    if not calcular:
+    if calcular and casa and escola:
+        fingerprint = _fingerprint_calculo(casa, escola, escolheu)
+        try:
+            if escolheu:
+                resultado = decidir(None, [], escolheu_escola=True)
+                st.session_state["resultado_salvo"] = {
+                    "fingerprint": fingerprint,
+                    "resultado": resultado,
+                    "rota": None,
+                    "casa": casa,
+                    "escola": escola,
+                    "atingidas": [],
+                }
+            else:
+                with st.spinner("Calculando o menor caminho a pé..."):
+                    rota = rota_a_pe(casa, escola, obter_api_key())
+                atingidas = barreiras_atingidas(rota, barreiras, buffer_m)
+                resultado = decidir(rota, atingidas, escolheu_escola=False)
+                st.session_state["resultado_salvo"] = {
+                    "fingerprint": fingerprint,
+                    "resultado": resultado,
+                    "rota": rota,
+                    "casa": casa,
+                    "escola": escola,
+                    "atingidas": atingidas,
+                }
+        except ErroExterno as e:
+            st.session_state.pop("resultado_salvo", None)
+            st.error(f"{e}\n\nSem a rota não dá para decidir — isto **não** significa 'sem direito'.")
+            return
+
+    salvo = st.session_state.get("resultado_salvo")
+    if not salvo:
         if not (casa and escola):
             st.info("Informe os dois endereços e confira o que o sistema encontrou.")
         return
 
-    # A flag encerra a análise antes de gastar chamada de rota.
-    if escolheu:
-        resultado = decidir(None, [], escolheu_escola=True)
-        mostrar_resultado(resultado)
+    mostrar_resultado(salvo["resultado"])
+    rota = salvo.get("rota")
+    if rota is None:
         return
-
-    try:
-        with st.spinner("Calculando o menor caminho a pé..."):
-            rota = rota_a_pe(casa, escola, obter_api_key())
-        atingidas = barreiras_atingidas(rota, barreiras, buffer_m)
-    except ErroExterno as e:
-        st.error(f"{e}\n\nSem a rota não dá para decidir — isto **não** significa 'sem direito'.")
-        return
-
-    resultado = decidir(rota, atingidas, escolheu_escola=False)
-    mostrar_resultado(resultado)
 
     st.subheader("Trajeto")
     st.caption(
         "Rota em azul, barreiras em vermelho (traço grosso = tocada), "
         "A = casa, B = escola."
     )
-    st_folium(montar_mapa(rota, casa, escola, atingidas), height=520, use_container_width=True)
+    st_folium(
+        montar_mapa(rota, salvo["casa"], salvo["escola"], salvo["atingidas"]),
+        height=520,
+        use_container_width=True,
+        returned_objects=[],
+    )
 
 
 def mostrar_resultado(resultado) -> None:

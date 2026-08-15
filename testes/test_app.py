@@ -103,6 +103,17 @@ def test_rota_que_atravessa_barreira_da_direito(app):
     assert "Marginal Tietê" in pagina
 
 
+def test_resultado_permanece_apos_novo_rerun(app):
+    """O mapa e outros widgets disparam rerun; o veredito não pode sumir."""
+    at = preencher(app.run())
+    at.button[0].click()
+    at = at.run()
+    assert "COM DIREITO" in texto_da_pagina(at)
+
+    at = at.run()
+    assert "COM DIREITO" in texto_da_pagina(at)
+
+
 def test_rota_sem_barreira_nao_da_direito(app, monkeypatch):
     monkeypatch.setattr(core.routing, "rota_a_pe", lambda o, d, k: rota_entre(CASA, ESCOLA_PERTO))
     at = preencher(app.run())

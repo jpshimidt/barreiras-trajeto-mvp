@@ -13,6 +13,7 @@ from core.endereco_maps import (
     Local,
     MUNICIPIO,
     _candidato_tem_endereco,
+    _completar_local,
     pontuar_candidato,
 )
 from core.ors import TIMEOUT_S
@@ -84,13 +85,17 @@ def local_de_nominatim(
     except (KeyError, TypeError, ValueError):
         return None
 
-    return Local(
-        texto_original=consulta,
-        endereco_formatado=resultado.get("display_name") or "(sem rótulo)",
-        lat=lat,
-        lon=lon,
-        confianca=resultado.get("importance"),
-        adequacao=pontuar_candidato(props, endereco),
+    return _completar_local(
+        Local(
+            texto_original=consulta,
+            endereco_formatado=resultado.get("display_name") or "(sem rótulo)",
+            lat=lat,
+            lon=lon,
+            confianca=resultado.get("importance"),
+            adequacao=pontuar_candidato(props, endereco),
+        ),
+        endereco,
+        props,
     )
 
 

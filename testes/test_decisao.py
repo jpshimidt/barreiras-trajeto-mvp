@@ -306,6 +306,48 @@ def test_parse_endereco_maps_normaliza_espacos():
     assert endereco.cep == "02247-000"
 
 
+def test_parse_endereco_maps_aceita_r_borges():
+    endereco = parse_endereco_maps("R. Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000")
+    assert endereco.logradouro == "R. Borges"
+    assert endereco.numero == "353"
+    assert endereco.cep == "02247-000"
+
+
+def test_pontuacao_penaliza_rua_sem_numero_quando_informado():
+    endereco = EnderecoMaps(
+        texto="R. Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000",
+        logradouro="R. Borges",
+        numero="353",
+        bairro="Parada Inglesa",
+        cidade="São Paulo",
+        uf="SP",
+        cep="02247-000",
+    )
+    com_numero = pontuar_candidato(
+        {
+            "label": "353, Rua Borges, Parada Inglesa, São Paulo",
+            "street": "Rua Borges",
+            "housenumber": "353",
+            "postalcode": "02247-000",
+            "neighbourhood": "Parada Inglesa",
+            "confidence": 0.7,
+        },
+        endereco,
+    )
+    so_rua = pontuar_candidato(
+        {
+            "label": "Rua Borges, Tucuruvi, São Paulo",
+            "street": "Rua Borges",
+            "postalcode": "02247-000",
+            "neighbourhood": "Parada Inglesa",
+            "layer": "street",
+            "confidence": 0.7,
+        },
+        endereco,
+    )
+    assert com_numero > so_rua
+
+
 def test_parse_endereco_maps_aceita_sem_sp_e_cep_sem_hifen():
     """Colagem comum do Google Maps no celular: sem ' - SP' e CEP contínuo."""
     endereco = parse_endereco_maps("Rua Borges, 353 - Parada Inglesa, São paulo, 02247000")

@@ -9,6 +9,7 @@ from core.endereco_maps import (
     Local,
     MUNICIPIO,
     _candidato_tem_endereco,
+    _completar_local,
     pontuar_candidato,
 )
 from core.ors import TIMEOUT_S
@@ -56,13 +57,17 @@ def local_de_photon(feature: dict, consulta: str, endereco: EnderecoMaps) -> Loc
         return None
     lon, lat = coords[0], coords[1]
 
-    return Local(
-        texto_original=consulta,
-        endereco_formatado=props_norm["label"],
-        lat=float(lat),
-        lon=float(lon),
-        confianca=0.7,
-        adequacao=pontuar_candidato(props_norm, endereco),
+    return _completar_local(
+        Local(
+            texto_original=consulta,
+            endereco_formatado=props_norm["label"],
+            lat=float(lat),
+            lon=float(lon),
+            confianca=0.7,
+            adequacao=pontuar_candidato(props_norm, endereco),
+        ),
+        endereco,
+        props_norm,
     )
 
 

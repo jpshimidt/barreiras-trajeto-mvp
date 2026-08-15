@@ -50,6 +50,8 @@ class Local:
     lon: float
     confianca: float | None
     adequacao: int | None = None  # compatibilidade com o endereço colado; maior = melhor
+    numero_informado: str | None = None  # número colado pelo usuário
+    numero_confirmado: bool = True  # False = achou a rua, mas não o número exato
 
 
 @dataclass(frozen=True)
@@ -209,6 +211,41 @@ def _rua_estendida(informada: str, candidata: str) -> bool:
     return ni != nc and ni in nc
 
 
+def _numero_confirmado(endereco: EnderecoMaps, props: dict) -> bool:
+    """True quando o candidato traz o mesmo número informado na rua certa."""
+    if not endereco.numero:
+        return True
+    numero = endereco.numero
+    housenumber = str(props.get("housenumber") or "").strip()
+    if housenumber == numero:
+        return True
+    label = (props.get("label") or "").lower()
+    street = props.get("street") or props.get("name") or ""
+    if not re.search(rf"\b{re.escape(numero)}\b", label):
+        return False
+    if endereco.logradouro and (
+        _ruas_equivalentes(endereco.logradouro, street)
+        or _ruas_equivalentes(endereco.logradouro, label)
+    ):
+        return True
+    return False
+
+
+def _completar_local(local: Local, endereco: EnderecoMaps, props: dict) -> Local:
+    if not endereco.numero:
+        return local
+    return Local(
+        texto_original=local.texto_original,
+        endereco_formatado=local.endereco_formatado,
+        lat=local.lat,
+        lon=local.lon,
+        confianca=local.confianca,
+        adequacao=local.adequacao,
+        numero_informado=endereco.numero,
+        numero_confirmado=_numero_confirmado(endereco, props),
+    )
+
+
 def pontuar_candidato(props: dict, endereco: EnderecoMaps) -> int:
     """Quanto maior, mais o candidato combina com o endereço colado."""
     label = (props.get("label") or "").lower()
@@ -231,11 +268,12 @@ def pontuar_candidato(props: dict, endereco: EnderecoMaps) -> int:
             score += 10
 
     if endereco.numero:
-        housenumber = str(props.get("housenumber") or "")
-        if housenumber == endereco.numero:
-            score += 25
-        elif props.get("layer") == "street":
-            score -= 5
+        if _numero_confirmado(endereco, props):
+            score += 30
+        elif (props.get("layer") or "").lower() == "street" or not props.get("housenumber"):
+            score -= 45
+        else:
+            score -= 20
 
     if endereco.bairro:
         bairro = _sem_acentos(endereco.bairro.lower())
@@ -273,7 +311,7 @@ def local_de_feature(
 
     lon, lat = coords[0], coords[1]
     adequacao = pontuar_candidato(props, endereco) if endereco else None
-    return Local(
+    local = Local(
         texto_original=texto_original,
         endereco_formatado=props.get("label") or "(sem rótulo)",
         lat=float(lat),
@@ -281,6 +319,7 @@ def local_de_feature(
         confianca=props.get("confidence"),
         adequacao=adequacao,
     )
+    return _completar_local(local, endereco, props) if endereco else local
 
 
 def candidatos_ambiguos(
