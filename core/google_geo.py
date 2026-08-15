@@ -18,6 +18,7 @@ CENTRO_SP = (-23.5505, -46.6333)  # lat, lon
 
 
 def ler_google_api_key() -> str | None:
+    """Chave para chamadas server-side (Places API, Geocoding). Nunca enviar ao navegador."""
     try:
         import streamlit as st
 
@@ -29,6 +30,41 @@ def ler_google_api_key() -> str | None:
         pass
     chave = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
     return chave or None
+
+
+def ler_google_maps_js_key() -> str | None:
+    """
+    Chave restrita por HTTP referrer para o widget Autocomplete no navegador.
+
+    Use uma chave separada da server-side e restrinja a ``*.streamlit.app``.
+    """
+    try:
+        import streamlit as st
+
+        if "GOOGLE_MAPS_JS_KEY" in st.secrets:
+            chave = str(st.secrets["GOOGLE_MAPS_JS_KEY"]).strip()
+            if chave:
+                return chave
+    except Exception:
+        pass
+    chave = os.environ.get("GOOGLE_MAPS_JS_KEY", "").strip()
+    return chave or None
+
+
+def chave_google_para_widget() -> str | None:
+    """
+    Devolve a chave do Maps JavaScript para o componente de autocomplete.
+
+  Em produção exige ``GOOGLE_MAPS_JS_KEY`` — a chave server-side não pode ir ao browser.
+    """
+    from core.seguranca import em_ambiente_streamlit_cloud
+
+    js_key = ler_google_maps_js_key()
+    if js_key:
+        return js_key
+    if em_ambiente_streamlit_cloud():
+        return None
+    return ler_google_api_key()
 
 
 def _headers(api_key: str) -> dict[str, str]:

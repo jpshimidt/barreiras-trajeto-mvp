@@ -33,14 +33,13 @@ def decidir(rota: Rota | None, atingidas: list[Barreira], escolheu_escola: bool)
     distancia = rota.distancia_m if rota else None
 
     if atingidas:
-        # Uma mesma avenida vem fragmentada em dezenas de ways: o usuário lê o nome
-        # da rua uma vez, não uma vez por trecho.
-        nomes = sorted({b.nome for b in atingidas})
+        # Uma mesma avenida pode ter vários trechos (nº 100–500, 600–1200…).
+        rotulos = sorted({b.rotulo for b in atingidas})
         return Resultado(
             True,
-            f"O menor caminho a pé passa por: {', '.join(nomes)}.",
+            f"O menor caminho a pé passa por: {', '.join(rotulos)}.",
             distancia,
-            nomes,
+            rotulos,
         )
 
     return Resultado(

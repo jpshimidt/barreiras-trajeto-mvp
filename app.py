@@ -34,8 +34,10 @@ from core.endereco_maps import (
     resolver_geocodificacao,
 )
 from core.google_geo import (
+    chave_google_para_widget,
     extrair_coordenadas_maps_url,
     ler_google_api_key,
+    ler_google_maps_js_key,
     local_de_selecao_widget,
 )
 from core.routing import Rota, rota_a_pe
@@ -119,7 +121,7 @@ def montar_mapa(rota: Rota, casa: Local, escola: Local, atingidas: list[Barreira
                 "weight": 5 if tocada else 2,
                 "opacity": 0.9 if tocada else 0.35,
             },
-            tooltip=f"{barreira.nome} ({barreira.tipo})",
+            tooltip=f"{barreira.rotulo} ({barreira.tipo})",
         ).add_to(mapa)
 
     folium.PolyLine(
@@ -189,14 +191,21 @@ def _limpar_resultado_se_entrada_mudou(
 
 def _status_integracoes() -> None:
     """Indicadores discretos de quais APIs estão configuradas."""
-    google_ok = bool(ler_google_api_key() and google_places_input is not None)
+    google_js = bool(chave_google_para_widget() and google_places_input is not None)
+    google_srv = bool(ler_google_api_key())
     ors_ok = bool(_ler_api_key_ors())
     st.caption(
-        f"{'✅' if google_ok else '⚠️'} Google Places · "
+        f"{'✅' if google_js else '⚠️'} Google Autocomplete · "
         f"{'✅' if ors_ok else '⚠️'} OpenRouteService (rotas)"
     )
-    if not google_ok:
-        st.caption("Sem chave Google: endereços via colar texto + Nominatim/Photon.")
+    if not google_js:
+        st.caption(
+            "Configure `GOOGLE_MAPS_JS_KEY` (referrer `*.streamlit.app`) para busca no app."
+        )
+    elif google_srv and not ler_google_maps_js_key():
+        st.caption(
+            "⚠️ Usando chave server-side no widget — crie `GOOGLE_MAPS_JS_KEY` separada."
+        )
     if not ors_ok:
         st.caption("Sem chave ORS: cálculo de rota não funciona.")
 
@@ -231,10 +240,10 @@ def campo_endereco_google(rotulo: str, chave: str, exemplo: str, api_key: str) -
                         endereco_formatado=link.strip(),
                         lat=lat,
                         lon=lon,
-                        confianca=1.0,
-                        adequacao=80,
+                        confianca=0.5,
+                        adequacao=40,
                         numero_informado=None,
-                        numero_confirmado=True,
+                        numero_confirmado=False,
                     )
                     st.session_state[f"{chave}_local"] = local
             else:
@@ -356,7 +365,7 @@ def campo_endereco_colado(rotulo: str, chave: str, exemplo: str) -> Local | None
 
 
 def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
-    api_key = ler_google_api_key()
+    api_key = chave_google_para_widget()
     if api_key and google_places_input is not None:
         return campo_endereco_google(rotulo, chave, exemplo, api_key)
     return campo_endereco_colado(rotulo, chave, exemplo)
@@ -382,8 +391,8 @@ def pagina_principal() -> None:
             nomes = sorted({b.nome for b in barreiras})
             st.metric("Ruas cadastradas", len(nomes))
             st.caption(f"{len(barreiras)} trechos no total")
-            for nome in nomes:
-                st.write(f"• {nome}")
+            for barreira in sorted(barreiras, key=lambda b: b.rotulo):
+                st.write(f"• {barreira.rotulo}")
         except ErroExterno as e:
             st.error(str(e))
             st.stop()

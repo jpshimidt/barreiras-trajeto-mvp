@@ -1,10 +1,10 @@
 # Marco 1 (script de linha de comando)
-requests
-shapely
-pyproj
+requests==2.33.1
+shapely==2.1.2
+pyproj==3.7.2
 
 # Marco 4 em diante (interface Streamlit)
-streamlit
-folium
-streamlit-folium
-streamlit-authenticator>=0.4.0
+streamlit==1.61.1
+folium==0.20.0
+streamlit-folium==0.27.4
+streamlit-authenticator==0.4.2

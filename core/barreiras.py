@@ -11,6 +11,7 @@ from shapely.geometry.base import BaseGeometry
 
 from core.erros import ErroExterno
 from core.geo import crs_utm_local, para_metrico
+from core.recorte_trecho import rotulo_trecho
 from core.routing import Rota
 
 BUFFER_M_PADRAO = 5.0
@@ -27,6 +28,19 @@ class Barreira:
     nome: str
     tipo: str
     geometria: BaseGeometry  # LineString ou MultiLineString, EPSG:4326
+    numero_inicio: int | None = None
+    numero_fim: int | None = None
+    paridade: str | None = None
+
+    @property
+    def rotulo(self) -> str:
+        return rotulo_trecho(self.nome, self.numero_inicio, self.numero_fim, self.paridade)
+
+
+def _int_ou_none(valor) -> int | None:
+    if valor is None or valor == "":
+        return None
+    return int(valor)
 
 
 def carregar_barreiras(caminho: str | Path) -> list[Barreira]:
@@ -59,6 +73,9 @@ def carregar_barreiras(caminho: str | Path) -> list[Barreira]:
                 nome=props.get("nome") or "(sem nome)",
                 tipo=props.get("tipo") or "(sem tipo)",
                 geometria=geom,
+                numero_inicio=_int_ou_none(props.get("numero_inicio")),
+                numero_fim=_int_ou_none(props.get("numero_fim")),
+                paridade=props.get("paridade") or None,
             )
         )
 

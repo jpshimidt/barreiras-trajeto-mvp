@@ -8,18 +8,7 @@ from typing import Any
 import streamlit as st
 import streamlit_authenticator as stauth
 
-_COOKIE_KEYS_PADRAO = frozenset(
-    {
-        "troque-esta-chave-secreta",
-        "gere-uma-string-aleatoria-longa-e-secreta",
-    }
-)
-
-
-def auth_desabilitado() -> bool:
-    """Permite desenvolvimento local sem secrets de login (`AUTH_DISABLED=1`)."""
-    valor = os.environ.get("AUTH_DISABLED", "").strip().lower()
-    return valor in {"1", "true", "yes", "on"}
+from core.seguranca import cookie_key_segura, em_ambiente_streamlit_cloud, senha_parece_hash
 
 
 def _config_auth() -> dict[str, Any] | None:
@@ -31,15 +20,28 @@ def _config_auth() -> dict[str, Any] | None:
     return None
 
 
+def _validar_credenciais(credenciais: dict[str, Any]) -> None:
+    """Recusa configuração insegura em produção (Streamlit Cloud)."""
+    if not em_ambiente_streamlit_cloud():
+        return
+
+    usernames = (credenciais.get("usernames") or {}).values()
+    for usuario in usernames:
+        senha = str(usuario.get("password", ""))
+        if senha and not senha_parece_hash(senha):
+            st.error(
+                "Senha em texto puro detectada nos Secrets. "
+                "Gere um hash bcrypt e substitua o campo `password` antes de publicar."
+            )
+            st.stop()
+
+
 def exigir_login() -> bool:
     """
     Exibe tela de login e devolve True se o usuário está autenticado.
 
     Credenciais em secrets.toml / Streamlit Cloud Secrets, seção [auth].
     """
-    if auth_desabilitado():
-        return True
-
     config = _config_auth()
     if not config:
         st.error(
@@ -55,17 +57,21 @@ def exigir_login() -> bool:
         st.stop()
         return False
 
+    _validar_credenciais(credenciais)
+
     cookie = config.get("cookie") or {}
     cookie_key = (
         cookie.get("key")
         or config.get("cookie_key")
-        or os.environ.get("AUTH_COOKIE_KEY", "troque-esta-chave-secreta")
-    )
-    if cookie_key in _COOKIE_KEYS_PADRAO:
-        st.sidebar.warning(
-            "Configure `cookie_key` nos Secrets com uma string aleatória longa — "
-            "a chave padrão não é segura em produção."
+        or os.environ.get("AUTH_COOKIE_KEY", "")
+    ).strip()
+    if not cookie_key_segura(cookie_key):
+        st.error(
+            "Chave de cookie (`cookie_key`) ausente ou insegura. "
+            "Defina nos Secrets uma string aleatória com pelo menos 32 caracteres."
         )
+        st.stop()
+        return False
 
     authenticator = stauth.Authenticate(
         credenciais,

@@ -93,6 +93,20 @@ def test_nao_escolheu_e_nao_toca_barreira_nao_tem_direito():
     assert resultado.distancia_m == 1000.0
 
 
+def test_trecho_com_faixa_aparece_no_motivo():
+    trecho = Barreira(
+        "t1",
+        "Avenida Inajar de Souza",
+        "avenida",
+        LineString([(LON, LAT), (LON + 0.01, LAT)]),
+        numero_inicio=100,
+        numero_fim=500,
+    )
+    resultado = decidir(rota_transversal(), [trecho], escolheu_escola=False)
+    assert "Avenida Inajar de Souza (nº 100–500)" in resultado.motivo
+    assert resultado.barreiras_atingidas == ["Avenida Inajar de Souza (nº 100–500)"]
+
+
 def test_avenida_fragmentada_aparece_uma_vez_so():
     """Uma avenida vem em dezenas de ways do OSM; o usuário lê o nome uma vez."""
     trechos = [
@@ -236,13 +250,24 @@ def test_carrega_propriedades_da_barreira(tmp_path):
             {
                 "type": "Feature",
                 "geometry": {"type": "LineString", "coordinates": [[LON, LAT], [LON + 0.01, LAT]]},
-                "properties": {"id": "abc", "nome": "Marginal Tietê", "tipo": "via expressa"},
+                "properties": {
+                    "id": "abc",
+                    "nome": "Marginal Tietê",
+                    "tipo": "via expressa",
+                    "numero_inicio": 100,
+                    "numero_fim": 500,
+                    "paridade": "par",
+                },
             }
         ],
     )
     (barreira,) = carregar_barreiras(caminho)
 
     assert (barreira.id, barreira.nome, barreira.tipo) == ("abc", "Marginal Tietê", "via expressa")
+    assert barreira.numero_inicio == 100
+    assert barreira.numero_fim == 500
+    assert barreira.paridade == "par"
+    assert barreira.rotulo == "Marginal Tietê (nº 100–500), par"
 
 
 def test_cadastro_vazio_e_erro_nao_resposta_negativa(tmp_path):

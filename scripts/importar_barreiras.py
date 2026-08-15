@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Converte uma lista de nomes de rua no GeoJSON de barreiras, via Overpass API.
+Converte uma lista de trechos de barreira no GeoJSON, via Overpass API.
+
+Cada linha do arquivo de entrada pode ser:
+  - ``Marginal Tietê`` — rua inteira
+  - ``Av. X;100;500`` — só do nº 100 ao 500 (geometria recortada com OSM)
+  - ``Av. X;100;500;par`` — intervalo com paridade
 
 Roda OFFLINE, quando o cadastro muda — nunca no runtime do app.
 
@@ -27,6 +32,14 @@ from pathlib import Path
 
 import requests
 
+from core.recorte_trecho import (
+    MarcaNumero,
+    RegistroTrecho,
+    marcas_de_coordenadas,
+    parse_linha_trecho,
+    recortar_linha_por_numeros,
+)
+
 MUNICIPIO = "São Paulo"
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
@@ -37,15 +50,14 @@ TIMEOUT_CONSULTA_S = 180  # São Paulo é área grande; a consulta demora
 TIMEOUT_OVERPASS_S = 120  # o [timeout:] de dentro da própria consulta
 TENTATIVAS = 4
 
-# Ruas de fronteira da Zona Norte, só para teste enquanto a lista real não chega.
-# A grafia aqui é chute: é justamente o que o relatório de ways por rua vai conferir.
-RUAS_TESTE = [
-    "Marginal Tietê",
-    "Avenida Engenheiro Caetano Álvares",
-    "Avenida Inajar de Souza",
-    "Avenida Santos Dumont",
-    "Avenida Cruzeiro do Sul",
-    "Rodovia Fernão Dias",
+# Trechos de teste — maioria da Zona Norte; inclui exemplo com faixa de número.
+TRECHOS_TESTE = [
+    RegistroTrecho("Marginal Tietê"),
+    RegistroTrecho("Avenida Engenheiro Caetano Álvares"),
+    RegistroTrecho("Avenida Inajar de Souza", 100, 2500),
+    RegistroTrecho("Avenida Santos Dumont"),
+    RegistroTrecho("Avenida Cruzeiro do Sul"),
+    RegistroTrecho("Rodovia Fernão Dias"),
 ]
 
 # `highway` do OSM -> rótulo que o usuário final lê no motivo da decisão.
@@ -114,43 +126,152 @@ def slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", sem_acento.lower()).strip("-")
 
 
-def feature_de_way(elemento: dict, importado_em: str) -> dict | None:
+def feature_de_way(
+    elemento: dict,
+    importado_em: str,
+    trecho: RegistroTrecho | None = None,
+    marcas: list[MarcaNumero] | None = None,
+) -> dict | None:
     """Um way do Overpass (com `out geom`) vira uma Feature de LineString."""
+    from shapely.geometry import LineString
+
     geometria = elemento.get("geometry") or []
     if len(geometria) < 2:
         return None  # way sem geometria utilizável
 
+    coords = [(p["lon"], p["lat"]) for p in geometria]
+    linha = LineString(coords)
+    trecho = trecho or RegistroTrecho(elemento.get("tags", {}).get("name") or "(sem nome)")
+
+    if trecho.tem_faixa():
+        if not marcas:
+            return None
+        recortada = recortar_linha_por_numeros(
+            linha,
+            marcas,
+            trecho.numero_inicio,
+            trecho.numero_fim,
+            paridade=trecho.paridade,
+        )
+        if recortada is None or recortada.is_empty:
+            return None
+        linha = recortada
+        coords = list(linha.coords)
+
     tags = elemento.get("tags") or {}
-    nome = tags.get("name") or "(sem nome)"
+    nome = tags.get("name") or trecho.nome or "(sem nome)"
     osm_way_id = elemento.get("id")
+    sufixo_trecho = ""
+    if trecho.tem_faixa():
+        sufixo_trecho = f"-{trecho.numero_inicio or 0}-{trecho.numero_fim or 0}"
+        if trecho.paridade:
+            sufixo_trecho += f"-{trecho.paridade}"
+
+    props = {
+        "id": f"{slug(nome)}-{osm_way_id}{sufixo_trecho}",
+        "nome": nome,
+        "tipo": TIPOS.get(tags.get("highway"), tags.get("highway") or "(sem tipo)"),
+        "municipio": MUNICIPIO,
+        "origem": "overpass",
+        "osm_way_id": osm_way_id,
+        "importado_em": importado_em,
+    }
+    if trecho.tem_faixa():
+        props["numero_inicio"] = trecho.numero_inicio
+        props["numero_fim"] = trecho.numero_fim
+        if trecho.paridade:
+            props["paridade"] = trecho.paridade
 
     return {
         "type": "Feature",
-        "geometry": {
-            "type": "LineString",
-            "coordinates": [[p["lon"], p["lat"]] for p in geometria],
-        },
-        "properties": {
-            "id": f"{slug(nome)}-{osm_way_id}",
-            "nome": nome,
-            "tipo": TIPOS.get(tags.get("highway"), tags.get("highway") or "(sem tipo)"),
-            "municipio": MUNICIPIO,
-            "origem": "overpass",
-            "osm_way_id": osm_way_id,
-            "importado_em": importado_em,
-        },
+        "geometry": {"type": "LineString", "coordinates": [list(c) for c in coords]},
+        "properties": props,
     }
 
 
-def overpass_para_geojson(resposta: dict, importado_em: str | None = None) -> dict:
+def overpass_para_geojson(
+    resposta: dict,
+    importado_em: str | None = None,
+    trechos: list[RegistroTrecho] | None = None,
+    marcas_por_way: dict[int, list[MarcaNumero]] | None = None,
+) -> dict:
+    """Converte resposta Overpass em FeatureCollection, opcionalmente por trecho."""
     importado_em = importado_em or date.today().isoformat()
-    features = [
-        feature
-        for elemento in (resposta.get("elements") or [])
-        if elemento.get("type") == "way"
-        and (feature := feature_de_way(elemento, importado_em)) is not None
-    ]
+    elementos = [e for e in (resposta.get("elements") or []) if e.get("type") == "way"]
+    marcas_por_way = marcas_por_way or {}
+
+    if not trechos:
+        features = [
+            feature
+            for elemento in elementos
+            if (feature := feature_de_way(elemento, importado_em)) is not None
+        ]
+        return {"type": "FeatureCollection", "name": "barreiras", "features": features}
+
+    features: list[dict] = []
+    for trecho in trechos:
+        for elemento in elementos:
+            nome_way = ((elemento.get("tags") or {}).get("name") or "").lower()
+            alvo = trecho.nome.lower()
+            if not (alvo in nome_way or nome_way in alvo):
+                continue
+            wid = elemento.get("id")
+            marcas = marcas_por_way.get(wid, []) if trecho.tem_faixa() else None
+            if trecho.tem_faixa() and not marcas:
+                continue
+            feature = feature_de_way(elemento, importado_em, trecho, marcas)
+            if feature:
+                features.append(feature)
     return {"type": "FeatureCollection", "name": "barreiras", "features": features}
+
+
+def montar_consulta_numeros(way_ids: list[int]) -> str:
+    if not way_ids:
+        return ""
+    ids = ",".join(str(w) for w in way_ids[:400])
+    return (
+        f"[out:json][timeout:120];\n"
+        f"way(id:{ids});\n"
+        f'node(w)["addr:housenumber"];\n'
+        f"out body;\n"
+    )
+
+
+def indexar_numeros_por_way(
+    resposta_ways: dict, resposta_numeros: dict
+) -> dict[int, list[MarcaNumero]]:
+    """Associa nós com addr:housenumber aos ways e projeta sobre a geometria."""
+    from shapely.geometry import LineString
+
+    ways: dict[int, LineString] = {}
+    nos_do_way: dict[int, set[int]] = {}
+    for el in resposta_ways.get("elements") or []:
+        if el.get("type") != "way":
+            continue
+        geom = el.get("geometry") or []
+        if len(geom) < 2:
+            continue
+        wid = el["id"]
+        ways[wid] = LineString([(p["lon"], p["lat"]) for p in geom])
+        nos_do_way[wid] = set(el.get("nodes") or [])
+
+    nos: dict[int, tuple[int, float, float]] = {}
+    for el in resposta_numeros.get("elements") or []:
+        if el.get("type") != "node":
+            continue
+        tags = el.get("tags") or {}
+        bruto = str(tags.get("addr:housenumber", "")).strip()
+        if not bruto.isdigit():
+            continue
+        nos[el["id"]] = (int(bruto), el["lon"], el["lat"])
+
+    marcas_por_way: dict[int, list[MarcaNumero]] = {}
+    for wid, linha in ways.items():
+        membros = nos_do_way.get(wid, set())
+        pontos = [nos[nid] for nid in membros if nid in nos]
+        if pontos:
+            marcas_por_way[wid] = marcas_de_coordenadas(linha, pontos)
+    return marcas_por_way
 
 
 def contar_por_rua(geojson: dict) -> dict[str, int]:
@@ -241,11 +362,22 @@ def consultar_overpass(sessao: requests.Session, consulta: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def ler_ruas(caminho: Path) -> list[str]:
-    """Uma rua por linha; `#` comenta."""
-    linhas = caminho.read_text(encoding="utf-8").splitlines()
-    ruas = [linha.strip() for linha in linhas]
-    return [r for r in ruas if r and not r.startswith("#")]
+def ler_trechos(caminho: Path) -> list[RegistroTrecho]:
+    """Lê trechos do cadastro (rua inteira ou faixa de número)."""
+    trechos: list[RegistroTrecho] = []
+    for linha in caminho.read_text(encoding="utf-8").splitlines():
+        trecho = parse_linha_trecho(linha)
+        if trecho:
+            trechos.append(trecho)
+    return trechos
+
+
+def nomes_unicos(trechos: list[RegistroTrecho]) -> list[str]:
+    vistos: list[str] = []
+    for trecho in trechos:
+        if trecho.nome not in vistos:
+            vistos.append(trecho.nome)
+    return vistos
 
 
 def main() -> int:
@@ -275,13 +407,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    ruas = RUAS_TESTE if args.ruas_teste else ler_ruas(args.ruas)
-    if not ruas:
-        raise SystemExit("Lista de ruas vazia.")
+    trechos = TRECHOS_TESTE if args.ruas_teste else ler_trechos(args.ruas)
+    if not trechos:
+        raise SystemExit("Lista de trechos vazia.")
 
-    print(f"{len(ruas)} ruas pedidas:")
-    for rua in ruas:
-        print(f"  - {rua}")
+    ruas = nomes_unicos(trechos)
+    print(f"{len(trechos)} trechos pedidos ({len(ruas)} ruas distintas):")
+    for trecho in trechos:
+        if trecho.tem_faixa():
+            print(
+                f"  - {trecho.nome} "
+                f"(nº {trecho.numero_inicio or '…'}–{trecho.numero_fim or '…'}"
+                f"{', ' + trecho.paridade if trecho.paridade else ''})"
+            )
+        else:
+            print(f"  - {trecho.nome} (rua inteira)")
     print()
 
     sessao = requests.Session()
@@ -308,7 +448,18 @@ def main() -> int:
 
     print("Consultando o Overpass (pode levar minutos)...")
     resposta = consultar_overpass(sessao, consulta)
-    geojson = overpass_para_geojson(resposta)
+
+    way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
+    marcas_por_way: dict[int, list[MarcaNumero]] = {}
+    if way_ids and any(t.tem_faixa() for t in trechos):
+        print(f"Buscando números de porta em {len(way_ids)} ways...")
+        consulta_nums = montar_consulta_numeros(way_ids)
+        if consulta_nums:
+            resp_nums = consultar_overpass(sessao, consulta_nums)
+            marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
+            print(f"  {sum(len(v) for v in marcas_por_way.values())} marcas de número encontradas")
+
+    geojson = overpass_para_geojson(resposta, trechos=trechos, marcas_por_way=marcas_por_way)
 
     contagem = contar_por_rua(geojson)
     print(f"\n{len(geojson['features'])} ways importados:")

@@ -1,14 +1,16 @@
-# Ruas cadastradas como barreira. Uma por linha; '#' comenta.
+# Ruas cadastradas como barreira. Uma entrada por linha; '#' comenta.
 #
-# PROVISÓRIO: ruas de fronteira da Zona Norte escolhidas só para testar o
-# importador. A grafia abaixo é chute e precisa ser conferida contra o OSM —
-# rode o importador e olhe o relatório de ways por rua.
+# Formatos:
+#   Marginal Tietê                    — rua inteira
+#   Av. Inajar de Souza;100;2500      — só do nº 100 ao 2500 (recorte na importação)
+#   Av. Exemplo;100;500;par           — intervalo, apenas números pares
 #
+# PROVISÓRIO: ruas de fronteira da Zona Norte para testar o importador.
 # Substituir pela lista real revisada por quem conhece a cidade.
 
 Marginal Tietê
 Avenida Engenheiro Caetano Álvares
-Avenida Inajar de Souza
+Avenida Inajar de Souza;100;2500
 Avenida Santos Dumont
 Avenida Cruzeiro do Sul
 Rodovia Fernão Dias
