@@ -22,11 +22,11 @@ from core.routing import Rota
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 # Santana -> Bom Retiro: atravessa a Marginal Tietê do cadastro à mão.
-CASA = Local("casa", "R. Voluntários da Pátria, 1000 — Santana", -23.5100, -46.6280, 0.9)
-ESCOLA = Local("escola", "Av. Rudge, 700 — Bom Retiro", -23.5265, -46.6440, 0.9)
+CASA = Local("casa", "R. Voluntários da Pátria, 1000 — Santana", -23.5100, -46.6280, 0.9, adequacao=100)
+ESCOLA = Local("escola", "Av. Rudge, 700 — Bom Retiro", -23.5265, -46.6440, 0.9, adequacao=100)
 
 # Santana -> Santana: não encosta em barreira nenhuma.
-ESCOLA_PERTO = Local("escola", "R. Alfredo Pujol, 500 — Santana", -23.4995, -46.6260, 0.9)
+ESCOLA_PERTO = Local("escola", "R. Alfredo Pujol, 500 — Santana", -23.4995, -46.6260, 0.9, adequacao=100)
 
 
 def rota_entre(a: Local, b: Local) -> Rota:
@@ -167,10 +167,11 @@ def test_sem_cep_avisa(app):
 
 def test_candidatos_empatados_viram_escolha_do_usuario(app, monkeypatch):
     """Em SP nome de rua repete entre distritos; a página não pode escolher sozinha."""
-    outro = Local("casa", "R. Voluntários da Pátria — Perus", -23.40, -46.75, 0.88)
+    outro = Local("casa", "R. Voluntários da Pátria — Perus", -23.40, -46.75, 0.88, adequacao=95)
     monkeypatch.setattr(core.geocode, "geocodificar", lambda t, k, c=None: [CASA, outro])
 
     at = preencher(app.run())
 
     assert at.radio
     assert "Perus" in str(at.radio[0].options)
+    assert at.button[0].disabled is True
