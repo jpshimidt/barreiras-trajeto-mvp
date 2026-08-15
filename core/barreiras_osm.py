@@ -36,9 +36,10 @@ USER_AGENT = "barreiras-trajeto-mvp/0.1 (cadastro de barreiras)"
 # Relação OSM de São Paulo capital (admin_level=8) — constante documentada no README.
 RELACAO_SP_PADRAO = 298285
 
-TIMEOUT_CONSULTA_S = 180
-TIMEOUT_OVERPASS_S = 120
-TENTATIVAS = 4
+TIMEOUT_CONSULTA_S = (8, 45)
+TIMEOUT_OVERPASS_S = 40
+TENTATIVAS = 2
+DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 
 class OverpassIndisponivel(ErroExterno):
     """Nenhum mirror Overpass respondeu — o chamador pode usar Nominatim."""
@@ -319,7 +320,7 @@ def consultar_overpass(sessao: requests.Session, consulta: str) -> dict:
                     headers={"User-Agent": USER_AGENT},
                 )
             except requests.RequestException as e:
-                erros.append(f"{url}: rede ({e})")
+                erros.append(f"{url}: rede ({type(e).__name__})")
                 break
             if resp.status_code == 200:
                 return resp.json()
@@ -500,6 +501,160 @@ def buscar_features_nominatim(
     return features
 
 
+def decodificar_polyline(encoded: str) -> list[tuple[float, float]]:
+    """Polyline do Google Directions → [(lon, lat), ...]."""
+    coords: list[tuple[float, float]] = []
+    index = lat = lng = 0
+    while index < len(encoded):
+        for eixo in ("lat", "lng"):
+            shift = result = 0
+            while True:
+                byte = ord(encoded[index]) - 63
+                index += 1
+                result |= (byte & 0x1F) << shift
+                shift += 5
+                if byte < 0x20:
+                    break
+            delta = ~(result >> 1) if result & 1 else (result >> 1)
+            if eixo == "lat":
+                lat += delta
+            else:
+                lng += delta
+        coords.append((lng / 1e5, lat / 1e5))
+    return coords
+
+
+def feature_de_linha(
+    coords: list[tuple[float, float]],
+    nome: str,
+    *,
+    origem: str,
+    tipo: str = "rua",
+    importado_em: str | None = None,
+) -> dict | None:
+    if len(coords) < 2:
+        return None
+    importado_em = importado_em or date.today().isoformat()
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": [list(c) for c in coords]},
+        "properties": {
+            "id": f"{slug(nome)}-{origem}",
+            "nome": nome,
+            "tipo": tipo,
+            "municipio": MUNICIPIO,
+            "origem": origem,
+            "importado_em": importado_em,
+        },
+    }
+
+
+def _pontos_google_para_rota(
+    api_key: str, nome: str, trecho: RegistroTrecho | None
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Dois pontos (lat, lon) nas extremidades da via, via Geocoding."""
+    from core.google_geo import GEOCODE_URL
+
+    if trecho and trecho.tem_faixa():
+        consultas = [
+            f"{nome}, {trecho.numero_inicio}, {MUNICIPIO}, SP, Brasil",
+            f"{nome}, {trecho.numero_fim}, {MUNICIPIO}, SP, Brasil",
+        ]
+    else:
+        consultas = [
+            f"{nome}, 1, {MUNICIPIO}, SP, Brasil",
+            f"{nome}, 2500, {MUNICIPIO}, SP, Brasil",
+        ]
+
+    pontos: list[tuple[float, float]] = []
+    for consulta in consultas:
+        try:
+            resp = requests.get(
+                GEOCODE_URL,
+                params={
+                    "address": consulta,
+                    "key": api_key,
+                    "components": "country:BR|administrative_area:SP|locality:São Paulo",
+                    "language": "pt-BR",
+                },
+                timeout=TIMEOUT_S,
+            )
+        except requests.RequestException:
+            return None
+        if resp.status_code != 200:
+            return None
+        dados = resp.json()
+        if dados.get("status") != "OK":
+            return None
+        loc = ((dados.get("results") or [{}])[0].get("geometry") or {}).get("location") or {}
+        if loc.get("lat") is None or loc.get("lng") is None:
+            return None
+        pontos.append((float(loc["lat"]), float(loc["lng"])))
+
+    if len(pontos) != 2:
+        return None
+    if pontos[0] == pontos[1]:
+        return None
+    return pontos[0], pontos[1]
+
+
+def buscar_features_google_rota(
+    nome: str,
+    trecho: RegistroTrecho | None = None,
+    tipo: str | None = None,
+) -> list[dict]:
+    """Fallback no Streamlit Cloud: traçado da via via Google Directions."""
+    from core.google_geo import ler_google_api_key
+
+    api_key = ler_google_api_key()
+    if not api_key:
+        return []
+
+    extremos = _pontos_google_para_rota(api_key, nome, trecho)
+    if not extremos:
+        return []
+    origem, destino = extremos
+    try:
+        resp = requests.get(
+            DIRECTIONS_URL,
+            params={
+                "origin": f"{origem[0]},{origem[1]}",
+                "destination": f"{destino[0]},{destino[1]}",
+                "mode": "driving",
+                "region": "br",
+                "language": "pt-BR",
+                "key": api_key,
+            },
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException as e:
+        raise ErroExterno(f"Google Directions falhou na rede: {e}") from e
+    if resp.status_code != 200:
+        return []
+    dados = resp.json()
+    if dados.get("status") != "OK":
+        return []
+    rotas = dados.get("routes") or []
+    if not rotas:
+        return []
+    encoded = ((rotas[0].get("overview_polyline") or {}).get("points")) or ""
+    coords = decodificar_polyline(encoded)
+    tipo_via = _normalizar_tipo(tipo) or "rua"
+    feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
+    return [feature] if feature else []
+
+
+def _features_fallback(sessao: requests.Session, nome: str, trecho: RegistroTrecho, tipo: str | None) -> list[dict]:
+    """Nominatim e, se falhar, Google Directions — usado quando Overpass está bloqueado."""
+    try:
+        features = buscar_features_nominatim(sessao, nome, trecho)
+    except ErroExterno:
+        features = []
+    if features:
+        return features
+    return buscar_features_google_rota(nome, trecho, tipo)
+
+
 def _features_para_barreiras(features: list[dict]) -> list[Barreira]:
     barreiras: list[Barreira] = []
     for i, feature in enumerate(features):
@@ -563,13 +718,7 @@ def buscar_barreiras_rua(
         )
         features = geojson.get("features") or []
     except OverpassIndisponivel:
-        if trecho.tem_faixa():
-            raise ErroExterno(
-                "Serviço Overpass indisponível no momento. "
-                "Para cadastrar faixa por número, tente de novo mais tarde. "
-                "Ou cadastre a rua inteira (nº início e fim = 0)."
-            ) from None
-        features = buscar_features_nominatim(sessao, nome, trecho)
+        features = _features_fallback(sessao, nome, trecho, tipo)
 
     if not features and not regex:
         return buscar_barreiras_rua(

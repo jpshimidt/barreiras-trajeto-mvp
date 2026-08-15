@@ -10,6 +10,7 @@ from core.barreiras_osm import (
     OverpassIndisponivel,
     buscar_barreiras_rua,
     consultar_overpass,
+    decodificar_polyline,
     feature_de_way,
     nome_via_de_entrada,
     overpass_para_geojson,
@@ -139,6 +140,47 @@ def test_buscar_barreiras_usa_nominatim_quando_overpass_indisponivel(monkeypatch
     monkeypatch.setattr(
         "core.barreiras_osm.buscar_features_nominatim",
         lambda sessao, nome, trecho=None: [feature_nominatim],
+    )
+
+    barreiras = buscar_barreiras_rua("Rua Cruz de Malta")
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"
+
+
+def test_decodificar_polyline_google():
+    # Linha (38.5, -120.2) → (40.7, -120.95) → (43.252, -126.453) do exemplo do Google
+    coords = decodificar_polyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@")
+    assert len(coords) == 3
+    assert coords[0] == pytest.approx((-120.2, 38.5), abs=1e-4)
+
+
+def test_buscar_barreiras_usa_google_quando_nominatim_falha(monkeypatch):
+    def overpass_falha(sessao, consulta):
+        raise OverpassIndisponivel("todos os mirrors falharam")
+
+    feature_google = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-46.60, -23.48], [-46.59, -23.48]],
+        },
+        "properties": {
+            "id": "rua-cruz-de-malta-google-directions",
+            "nome": "Rua Cruz de Malta",
+            "tipo": "rua",
+            "municipio": "São Paulo",
+            "origem": "google-directions",
+        },
+    }
+
+    monkeypatch.setattr("core.barreiras_osm.consultar_overpass", overpass_falha)
+    monkeypatch.setattr(
+        "core.barreiras_osm.buscar_features_nominatim",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ErroExterno("Nominatim bloqueado")),
+    )
+    monkeypatch.setattr(
+        "core.barreiras_osm.buscar_features_google_rota",
+        lambda *args, **kwargs: [feature_google],
     )
 
     barreiras = buscar_barreiras_rua("Rua Cruz de Malta")
