@@ -25,7 +25,7 @@ from core.barreiras import (
 )
 from core.decisao import decidir
 from core.erros import ErroExterno
-from core.geocode import Local, candidatos_ambiguos, geocodificar
+from core.geocode import EXEMPLO_ENDERECO_MAPS, Local, candidatos_ambiguos, geocodificar, parse_endereco_maps
 from core.routing import Rota, rota_a_pe
 
 ARQUIVO_BARREIRAS = Path(__file__).parent / "dados" / "barreiras.geojson"
@@ -133,22 +133,26 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     errado, coisa que um pin sozinho no mapa não denuncia.
     """
     st.markdown(f"**{rotulo}**")
-    texto = st.text_input("Endereço (rua e número)", key=f"{chave}_texto", placeholder=exemplo)
-    cep = st.text_input(
-        "CEP (recomendado)",
-        key=f"{chave}_cep",
-        placeholder="00000-000",
-        help="São Paulo tem milhares de nomes de rua repetidos entre distritos. "
-        "Sem CEP, o pin pode cair em outro bairro e a decisão sai inteiramente errada.",
+    texto = st.text_input(
+        "Endereço completo (como no Google Maps)",
+        key=f"{chave}_texto",
+        placeholder=exemplo,
+        help="Abra o endereço no Google Maps, copie a linha inteira e cole aqui. "
+        "O padrão é: rua e número - bairro, São Paulo - SP, CEP.",
     )
 
     if not texto.strip():
         return None
-    if not cep.strip():
-        st.warning("Sem CEP o endereço pode cair em outro distrito. Confira o resultado com atenção.")
+
+    _, cep = parse_endereco_maps(texto)
+    if not cep:
+        st.warning(
+            "Sem CEP no endereço colado. Copie a linha inteira do Google Maps — "
+            "o CEP no final ajuda a cair no bairro certo."
+        )
 
     try:
-        candidatos = geocodificar(texto, obter_api_key(), cep)
+        candidatos = geocodificar(texto, obter_api_key())
     except ErroExterno as e:
         st.error(str(e))
         return None
@@ -157,7 +161,7 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     if ambiguos:
         st.warning(
             f"{len(ambiguos) + 1} endereços com pontuação parecida. "
-            "Escolha o correto — informar o CEP costuma resolver."
+            "Escolha o que bate com o Google Maps."
         )
         opcoes = [candidatos[0], *ambiguos]
         escolhido = st.radio(
@@ -182,8 +186,9 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
 def main() -> None:
     st.title("🚌 Elegibilidade a transporte escolar")
     st.caption(
-        "Município de São Paulo. A criança tem direito quando o menor caminho a pé até a "
-        "escola encosta em alguma rua cadastrada como barreira."
+        "Município de São Paulo. Cole os endereços como no Google Maps. "
+        "A criança tem direito quando o menor caminho a pé até a escola encosta "
+        "em alguma rua cadastrada como barreira."
     )
 
     with st.sidebar:
@@ -217,9 +222,13 @@ def main() -> None:
 
     esquerda, direita = st.columns(2)
     with esquerda:
-        casa = campo_endereco("🏠 Endereço da casa", "casa", "R. Voluntários da Pátria, 1000, Santana")
+        casa = campo_endereco("🏠 Endereço da casa", "casa", EXEMPLO_ENDERECO_MAPS)
     with direita:
-        escola = campo_endereco("🏫 Endereço da escola", "escola", "Av. Rudge, 700, Bom Retiro")
+        escola = campo_endereco(
+            "🏫 Endereço da escola",
+            "escola",
+            "Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000",
+        )
 
     st.divider()
     escolheu = st.checkbox(

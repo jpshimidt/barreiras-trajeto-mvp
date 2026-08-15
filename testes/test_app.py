@@ -16,7 +16,7 @@ from streamlit.testing.v1 import AppTest
 
 import core.geocode
 import core.routing
-from core.geocode import Local
+from core.geocode import EXEMPLO_ENDERECO_MAPS, Local
 from core.routing import Rota
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -39,7 +39,9 @@ def app(monkeypatch):
     monkeypatch.setenv("ORS_API_KEY", "chave-de-teste")
 
     def geocode_falso(texto, api_key, cep=None):
-        return [CASA] if "casa" in texto.lower() else [ESCOLA]
+        if "voluntários" in texto.lower():
+            return [CASA]
+        return [ESCOLA]
 
     monkeypatch.setattr(core.geocode, "geocodificar", geocode_falso)
     monkeypatch.setattr(core.routing, "rota_a_pe", lambda o, d, k: rota_entre(o, d))
@@ -47,10 +49,8 @@ def app(monkeypatch):
 
 
 def preencher(at: AppTest) -> AppTest:
-    at.text_input[0].set_value("casa")
-    at.text_input[1].set_value("02011-000")
-    at.text_input[2].set_value("escola")
-    at.text_input[3].set_value("01133-000")
+    at.text_input[0].set_value(EXEMPLO_ENDERECO_MAPS)
+    at.text_input[1].set_value("Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000")
     return at.run()
 
 
@@ -158,8 +158,8 @@ def test_falha_do_ors_nao_vira_sem_direito(app, monkeypatch):
 
 def test_sem_cep_avisa(app):
     at = app.run()
-    at.text_input[0].set_value("casa")
-    at.text_input[2].set_value("escola")
+    at.text_input[0].set_value("Rua Borges, 353 - Parada Inglesa, São Paulo - SP")
+    at.text_input[1].set_value("R. da Grota, 483 - Vila Gustavo, São Paulo - SP")
     at = at.run()
 
     assert any("CEP" in w.value for w in at.warning)

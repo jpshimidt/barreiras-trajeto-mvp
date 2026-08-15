@@ -15,7 +15,7 @@ from core.barreiras import Barreira, barreiras_atingidas, carregar_barreiras
 from core.decisao import decidir
 from core.erros import ErroExterno
 from core.geo import crs_utm_local, para_metrico
-from core.geocode import Local, candidatos_ambiguos, local_de_feature, montar_consulta
+from core.geocode import Local, candidatos_ambiguos, extrair_cep, local_de_feature, montar_consulta, parse_endereco_maps
 from core.routing import Rota, rota_de_geojson, rota_reta
 
 # Referência em Santana, Zona Norte. 1 grau de latitude ~ 110.574 m nesta faixa.
@@ -280,6 +280,18 @@ def test_cep_entra_no_texto_enviado():
     assert montar_consulta("Rua São João, 100", "01035-000") == "Rua São João, 100, 01035-000"
 
 
+def test_cep_extraido_do_formato_maps():
+    texto = "R. Voluntários da Pátria, 1000 - Santana, São Paulo - SP, 02011-000"
+    assert extrair_cep(texto) == "02011-000"
+    assert montar_consulta(texto) == texto
+
+
+def test_parse_endereco_maps_normaliza_espacos():
+    texto, cep = parse_endereco_maps("  Rua   Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000  ")
+    assert texto == "Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000"
+    assert cep == "02247-000"
+
+
 def test_cep_ja_presente_nao_e_duplicado():
     texto = "Rua São João, 100, 01035-000"
     assert montar_consulta(texto, "01035-000") == texto
@@ -289,10 +301,27 @@ def test_sem_cep_o_texto_passa_limpo():
     assert montar_consulta("  Rua São João, 100  ", None) == "Rua São João, 100"
 
 
-def feature_pelias(label: str, locality: str | None, confianca: float, lon=LON, lat=LAT) -> dict:
+def feature_pelias(
+    label: str,
+    locality: str | None,
+    confianca: float,
+    lon=LON,
+    lat=LAT,
+    *,
+    layer: str | None = None,
+    street: str | None = None,
+    housenumber: str | None = None,
+) -> dict:
+    props = {"label": label, "locality": locality, "confidence": confianca}
+    if layer is not None:
+        props["layer"] = layer
+    if street is not None:
+        props["street"] = street
+    if housenumber is not None:
+        props["housenumber"] = housenumber
     return {
         "geometry": {"type": "Point", "coordinates": [lon, lat]},
-        "properties": {"label": label, "locality": locality, "confidence": confianca},
+        "properties": props,
     }
 
 
@@ -302,16 +331,27 @@ def test_candidato_de_outro_municipio_e_descartado():
 
 
 def test_candidato_de_sao_paulo_passa():
-    local = local_de_feature(feature_pelias("R. das Flores, São Paulo", "São Paulo", 0.9), "x")
+    local = local_de_feature(
+        feature_pelias("R. das Flores, São Paulo", "São Paulo", 0.9, street="R. das Flores"),
+        "x",
+    )
 
     assert local is not None
     assert local.endereco_formatado == "R. das Flores, São Paulo"
     assert (local.lon, local.lat) == (LON, LAT)
 
 
+def test_candidato_generico_de_cidade_e_descartado():
+    """'São Paulo, Brazil' sem rua não serve para decidir elegibilidade."""
+    assert local_de_feature(feature_pelias("São Paulo, Brazil", "São Paulo", 0.9, layer="locality"), "x") is None
+
+
 def test_candidato_sem_municipio_passa():
     """Filtrar demais custaria endereços válidos; o rótulo ainda vai à conferência."""
-    assert local_de_feature(feature_pelias("R. das Flores", None, 0.5), "x") is not None
+    assert local_de_feature(
+        feature_pelias("R. das Flores", None, 0.5, layer="street", street="R. das Flores"),
+        "x",
+    ) is not None
 
 
 def candidato(label: str, confianca: float | None) -> Local:
