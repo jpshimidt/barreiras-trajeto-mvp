@@ -23,7 +23,6 @@ USER_AGENT = "barreiras-trajeto-mvp/1.0 (elegibilidade transporte escolar SP)"
 _INTERVALO_MIN_S = 1.1
 _lock = threading.Lock()
 _ultima_requisicao = 0.0
-_bloqueado_ate = 0.0
 
 
 class NominatimRateLimited(Exception):
@@ -34,9 +33,6 @@ def _aguardar_intervalo() -> None:
     global _ultima_requisicao
     with _lock:
         agora = time.monotonic()
-        if agora < _bloqueado_ate:
-            time.sleep(_bloqueado_ate - agora)
-            agora = time.monotonic()
         espera = _INTERVALO_MIN_S - (agora - _ultima_requisicao)
         if espera > 0:
             time.sleep(espera)
@@ -102,10 +98,10 @@ def buscar_nominatim(consulta: str, *, limit: int = 8) -> list[dict]:
     """
     Consulta o Nominatim respeitando o intervalo mínimo entre requisições.
 
-    Levanta `NominatimRateLimited` em HTTP 429 para o chamador cair no ORS
-    sem mostrar erro técnico ao usuário.
+    Levanta `NominatimRateLimited` em HTTP 429 (após uma retentativa) para o
+    chamador usar Photon/ORS sem mostrar erro técnico ao usuário.
     """
-    global _bloqueado_ate
+    global _ultima_requisicao
     params = {
         "q": consulta,
         "format": "json",
@@ -124,9 +120,19 @@ def buscar_nominatim(consulta: str, *, limit: int = 8) -> list[dict]:
     except requests.RequestException as e:
         raise NominatimRateLimited(f"rede: {e}") from e
     if resp.status_code == 429:
-        with _lock:
-            _bloqueado_ate = time.monotonic() + 30.0
-        raise NominatimRateLimited("HTTP 429")
+        time.sleep(2.0)
+        _aguardar_intervalo()
+        try:
+            resp = requests.get(
+                NOMINATIM_URL,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+                timeout=TIMEOUT_S,
+            )
+        except requests.RequestException as e:
+            raise NominatimRateLimited(f"rede: {e}") from e
+        if resp.status_code == 429:
+            raise NominatimRateLimited("HTTP 429")
     if resp.status_code != 200:
         raise NominatimRateLimited(f"HTTP {resp.status_code}")
     dados = resp.json()

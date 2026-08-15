@@ -481,11 +481,14 @@ def test_consulta_nominatim_principal_prefere_numero_primeiro():
     )
 
 
-def test_geocodificar_cai_no_ors_quando_nominatim_limita(monkeypatch):
+def test_geocodificar_cai_no_ors_quando_nominatim_e_photon_falham(monkeypatch):
     from core.nominatim_geo import NominatimRateLimited
 
     def nominatim_bloqueado(*args, **kwargs):
         raise NominatimRateLimited("HTTP 429")
+
+    def photon_vazio(*args, **kwargs):
+        return []
 
     def ors_fake(consulta, api_key, cep=None):
         return [
@@ -506,8 +509,10 @@ def test_geocodificar_cai_no_ors_quando_nominatim_limita(monkeypatch):
 
     import core.endereco_maps as em
     import core.nominatim_geo as ng
+    import core.photon_geo as pg
 
     monkeypatch.setattr(ng, "buscar_nominatim", nominatim_bloqueado)
+    monkeypatch.setattr(pg, "buscar_photon", photon_vazio)
     monkeypatch.setattr(em, "_buscar_ors", ors_fake)
 
     candidatos = em.geocodificar(
@@ -516,6 +521,49 @@ def test_geocodificar_cai_no_ors_quando_nominatim_limita(monkeypatch):
     )
     assert candidatos
     assert "Rua Borges" in candidatos[0].endereco_formatado
+
+
+def test_geocodificar_usa_photon_quando_nominatim_limita(monkeypatch):
+    from core.nominatim_geo import NominatimRateLimited
+
+    def nominatim_bloqueado(*args, **kwargs):
+        raise NominatimRateLimited("HTTP 429")
+
+    def photon_fake(*args, **kwargs):
+        return [
+            {
+                "geometry": {"coordinates": [LON, LAT]},
+                "properties": {
+                    "housenumber": "483",
+                    "street": "Rua da Grota",
+                    "district": "Vila Gustavo",
+                    "city": "São Paulo",
+                    "state": "São Paulo",
+                    "country": "Brasil",
+                    "postcode": "02206-010",
+                    "osm_value": "house",
+                },
+            }
+        ]
+
+    def ors_vazio(*args, **kwargs):
+        return []
+
+    import core.endereco_maps as em
+    import core.nominatim_geo as ng
+    import core.photon_geo as pg
+
+    monkeypatch.setattr(ng, "buscar_nominatim", nominatim_bloqueado)
+    monkeypatch.setattr(pg, "buscar_photon", photon_fake)
+    monkeypatch.setattr(em, "_buscar_ors", ors_vazio)
+
+    candidatos = em.geocodificar(
+        "R. da Grota, 483 - Vila Gustavo, São Paulo - SP, 02206-010",
+        "chave-teste",
+    )
+    assert candidatos
+    assert (candidatos[0].adequacao or 0) >= 60
+    assert "Grota" in candidatos[0].endereco_formatado
 
 
 def test_candidato_sem_municipio_passa():
