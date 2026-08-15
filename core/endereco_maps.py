@@ -406,10 +406,7 @@ def geocodificar(texto: str, api_key: str | None = None, cep: str | None = None)
     locais: list[Local] = []
 
     for q in consultas_nominatim(endereco) or [consulta]:
-        import streamlit as st
-        items = buscar_nominatim(q)
-        st.write(f"DEBUG: Consulta '{q[:50]}...' retornou {len(items)} items do Nominatim")
-        for item in items:
+        for item in buscar_nominatim(q):
             for local in _locais_de_resultados([item], q, endereco, origem="nominatim"):
                 chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
                 if chave in vistos:
