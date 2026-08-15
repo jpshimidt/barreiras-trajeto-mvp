@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import pytest
+import requests
 
 from core.barreiras_osm import (
+    OVERPASS_ENDPOINTS,
+    OverpassIndisponivel,
     buscar_barreiras_rua,
+    consultar_overpass,
     feature_de_way,
     nome_via_de_entrada,
     overpass_para_geojson,
@@ -85,3 +89,58 @@ def test_overpass_para_geojson_trecho_inteiro():
 def test_feature_de_way_preserva_tipo_osm():
     props = feature_de_way(way(1, "Rua Teste", highway="residential"), "2026-01-01")["properties"]
     assert props["tipo"] == "rua"
+
+
+def test_consultar_overpass_tenta_proximo_mirror(monkeypatch):
+    urls_tentadas: list[str] = []
+
+    class RespostaFalsa:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"elements": []}
+
+    def post_falso(self, url, **kwargs):
+        urls_tentadas.append(url)
+        if "overpass-api.de" in url:
+            raise requests.exceptions.ConnectionError("Connection refused")
+        return RespostaFalsa()
+
+    monkeypatch.setattr("core.barreiras_osm.ler_overpass_urls", lambda: list(OVERPASS_ENDPOINTS))
+    monkeypatch.setattr(requests.Session, "post", post_falso)
+
+    resultado = consultar_overpass(requests.Session(), "[out:json];way(1);out;")
+    assert resultado == {"elements": []}
+    assert urls_tentadas[0].endswith("overpass-api.de/api/interpreter")
+    assert any("kumi.systems" in u for u in urls_tentadas)
+
+
+def test_buscar_barreiras_usa_nominatim_quando_overpass_indisponivel(monkeypatch):
+    def overpass_falha(sessao, consulta):
+        raise OverpassIndisponivel("todos os mirrors falharam")
+
+    feature_nominatim = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-46.63, -23.51], [-46.62, -23.51]],
+        },
+        "properties": {
+            "id": "rua-cruz-de-malta-nominatim-1",
+            "nome": "Rua Cruz de Malta",
+            "tipo": "rua",
+            "municipio": "São Paulo",
+            "origem": "nominatim",
+        },
+    }
+
+    monkeypatch.setattr("core.barreiras_osm.consultar_overpass", overpass_falha)
+    monkeypatch.setattr(
+        "core.barreiras_osm.buscar_features_nominatim",
+        lambda sessao, nome, trecho=None: [feature_nominatim],
+    )
+
+    barreiras = buscar_barreiras_rua("Rua Cruz de Malta")
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"

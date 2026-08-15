@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import unicodedata
@@ -24,7 +25,12 @@ from core.ors import TIMEOUT_S
 
 MUNICIPIO = "São Paulo"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
-OVERPASS = "https://overpass-api.de/api/interpreter"
+NOMINATIM_LOOKUP = "https://nominatim.openstreetmap.org/lookup"
+OVERPASS_ENDPOINTS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
+)
 USER_AGENT = "barreiras-trajeto-mvp/0.1 (cadastro de barreiras)"
 
 # Relação OSM de São Paulo capital (admin_level=8) — constante documentada no README.
@@ -33,6 +39,10 @@ RELACAO_SP_PADRAO = 298285
 TIMEOUT_CONSULTA_S = 180
 TIMEOUT_OVERPASS_S = 120
 TENTATIVAS = 4
+
+class OverpassIndisponivel(ErroExterno):
+    """Nenhum mirror Overpass respondeu — o chamador pode usar Nominatim."""
+
 
 TIPOS_OSM = {
     "motorway": "rodovia",
@@ -245,6 +255,30 @@ def ruas_sem_resultado(pedidas: list[str], geojson: dict) -> list[str]:
     return faltando
 
 
+def ler_overpass_urls() -> list[str]:
+    """URLs Overpass: secret/env ``OVERPASS_URL`` primeiro, depois mirrors públicos."""
+    custom: list[str] = []
+    try:
+        import streamlit as st
+
+        if "OVERPASS_URL" in st.secrets:
+            url = str(st.secrets["OVERPASS_URL"]).strip()
+            if url:
+                custom.append(url)
+    except Exception:
+        pass
+    env = os.environ.get("OVERPASS_URL", "").strip()
+    if env and env not in custom:
+        custom.append(env)
+    vistos: set[str] = set()
+    urls: list[str] = []
+    for url in [*custom, *OVERPASS_ENDPOINTS]:
+        if url not in vistos:
+            vistos.add(url)
+            urls.append(url)
+    return urls
+
+
 def descobrir_relacao_sp(sessao: requests.Session) -> int:
     resp = sessao.get(
         NOMINATIM,
@@ -272,25 +306,198 @@ def descobrir_relacao_sp(sessao: requests.Session) -> int:
 
 
 def consultar_overpass(sessao: requests.Session, consulta: str) -> dict:
-    espera = 5
-    for tentativa in range(1, TENTATIVAS + 1):
+    """Consulta Overpass tentando mirrors em sequência."""
+    erros: list[str] = []
+    for url in ler_overpass_urls():
+        espera = 5
+        for tentativa in range(1, TENTATIVAS + 1):
+            try:
+                resp = sessao.post(
+                    url,
+                    data={"data": consulta},
+                    timeout=TIMEOUT_CONSULTA_S,
+                    headers={"User-Agent": USER_AGENT},
+                )
+            except requests.RequestException as e:
+                erros.append(f"{url}: rede ({e})")
+                break
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code in (429, 504) and tentativa < TENTATIVAS:
+                time.sleep(espera)
+                espera *= 2
+                continue
+            erros.append(f"{url}: HTTP {resp.status_code}")
+            break
+    resumo = "; ".join(erros[:4])
+    if len(erros) > 4:
+        resumo += f"; … (+{len(erros) - 4} mirrors)"
+    raise OverpassIndisponivel(
+        "Overpass indisponível em todos os mirrors. "
+        f"Tentativas: {resumo or 'nenhuma URL configurada'}"
+    )
+
+
+def _coords_de_geometria_nominatim(geometria: dict) -> list[tuple[float, float]] | None:
+    tipo = geometria.get("type")
+    coords_bruto = geometria.get("coordinates")
+    if not coords_bruto:
+        return None
+    if tipo == "LineString":
+        linhas = [coords_bruto]
+    elif tipo == "MultiLineString":
+        linhas = coords_bruto
+    elif tipo == "Polygon":
+        linhas = [coords_bruto[0]]
+    else:
+        return None
+    if not linhas:
+        return None
+    melhor = max(linhas, key=len)
+    if len(melhor) < 2:
+        return None
+    return [(float(lon), float(lat)) for lon, lat in melhor]
+
+
+def feature_de_nominatim(
+    feature: dict,
+    importado_em: str,
+    trecho: RegistroTrecho | None = None,
+) -> dict | None:
+    coords = _coords_de_geometria_nominatim(feature.get("geometry") or {})
+    if not coords:
+        return None
+
+    props_osm = feature.get("properties") or {}
+    tags = props_osm.get("tags") or {}
+    nome = (
+        tags.get("name")
+        or props_osm.get("name")
+        or props_osm.get("display_name")
+        or (trecho.nome if trecho else None)
+        or "(sem nome)"
+    )
+    osm_id = props_osm.get("osm_id") or props_osm.get("place_id")
+    highway = tags.get("highway") or props_osm.get("type") or ""
+    tipo_via = TIPOS_OSM.get(highway, highway or "(sem tipo)")
+
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": [list(c) for c in coords]},
+        "properties": {
+            "id": f"{slug(nome)}-nominatim-{osm_id or slug(nome)}",
+            "nome": nome,
+            "tipo": tipo_via,
+            "municipio": MUNICIPIO,
+            "origem": "nominatim",
+            "importado_em": importado_em,
+        },
+    }
+
+
+def _nominatim_candidato_relevante(resultado: dict, nome_alvo: str) -> bool:
+    addr = resultado.get("address") or {}
+    display = (resultado.get("display_name") or "").lower()
+    if MUNICIPIO.lower() not in display and not any(
+        MUNICIPIO.lower() in str(addr.get(c) or "").lower()
+        for c in ("city", "town", "municipality", "county", "state")
+    ):
+        return False
+    if resultado.get("class") == "highway":
+        return True
+    road = (addr.get("road") or "").lower()
+    alvo = nome_alvo.lower()
+    return bool(road and (alvo in road or road in alvo))
+
+
+def _osm_id_lookup(resultado: dict) -> str | None:
+    tipo = (resultado.get("osm_type") or "").lower()
+    osm_id = resultado.get("osm_id")
+    if not osm_id:
+        return None
+    prefix = {"node": "N", "way": "W", "relation": "R"}.get(tipo)
+    if not prefix:
+        return None
+    return f"{prefix}{osm_id}"
+
+
+def buscar_features_nominatim(
+    sessao: requests.Session,
+    nome: str,
+    trecho: RegistroTrecho | None = None,
+) -> list[dict]:
+    """Fallback quando Overpass está bloqueado — geometria via Nominatim lookup."""
+    importado_em = date.today().isoformat()
+    consultas = [
+        f"{nome}, {MUNICIPIO}, SP, Brasil",
+        nome,
+    ]
+    osm_ids: list[str] = []
+    vistos: set[str] = set()
+    for consulta in consultas:
         try:
-            resp = sessao.post(
-                OVERPASS,
-                data={"data": consulta},
-                timeout=TIMEOUT_CONSULTA_S,
+            resp = sessao.get(
+                NOMINATIM,
+                params={
+                    "q": consulta,
+                    "format": "json",
+                    "limit": 8,
+                    "countrycodes": "br",
+                    "addressdetails": 1,
+                },
+                timeout=60,
                 headers={"User-Agent": USER_AGENT},
             )
         except requests.RequestException as e:
-            raise ErroExterno(f"Overpass falhou na rede: {e}") from e
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code in (429, 504) and tentativa < TENTATIVAS:
-            time.sleep(espera)
-            espera *= 2
+            raise ErroExterno(f"Nominatim falhou na rede: {e}") from e
+        if resp.status_code != 200:
             continue
-        raise ErroExterno(f"Overpass respondeu HTTP {resp.status_code}: {resp.text[:300]}")
-    raise ErroExterno("Overpass não respondeu depois de várias tentativas.")
+        for item in resp.json():
+            if not _nominatim_candidato_relevante(item, nome):
+                continue
+            oid = _osm_id_lookup(item)
+            if oid and oid not in vistos:
+                vistos.add(oid)
+                osm_ids.append(oid)
+        if osm_ids:
+            break
+
+    if not osm_ids:
+        return []
+
+    try:
+        resp = sessao.get(
+            NOMINATIM_LOOKUP,
+            params={
+                "osm_ids": ",".join(osm_ids[:10]),
+                "format": "geojson",
+                "polygon_geojson": 1,
+            },
+            timeout=60,
+            headers={"User-Agent": USER_AGENT},
+        )
+    except requests.RequestException as e:
+        raise ErroExterno(f"Nominatim lookup falhou na rede: {e}") from e
+    if resp.status_code != 200:
+        raise ErroExterno(f"Nominatim lookup respondeu HTTP {resp.status_code}")
+
+    colecao = resp.json()
+    features: list[dict] = []
+    alvo = (trecho.nome if trecho else nome).lower()
+    for feature in colecao.get("features") or []:
+        props = feature.get("properties") or {}
+        nome_feat = (
+            (props.get("tags") or {}).get("name")
+            or props.get("name")
+            or props.get("display_name")
+            or ""
+        ).lower()
+        if nome_feat and alvo not in nome_feat and nome_feat not in alvo:
+            continue
+        convertida = feature_de_nominatim(feature, importado_em, trecho)
+        if convertida:
+            features.append(convertida)
+    return features
 
 
 def _features_para_barreiras(features: list[dict]) -> list[Barreira]:
@@ -339,20 +546,30 @@ def buscar_barreiras_rua(
 
     sessao = requests.Session()
     consulta = montar_consulta([nome], relacao_id, regex=regex)
-    resposta = consultar_overpass(sessao, consulta)
+    features: list[dict]
+    try:
+        resposta = consultar_overpass(sessao, consulta)
 
-    way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
-    marcas_por_way: dict[int, list[MarcaNumero]] = {}
-    if way_ids and trecho.tem_faixa():
-        consulta_nums = montar_consulta_numeros(way_ids)
-        if consulta_nums:
-            resp_nums = consultar_overpass(sessao, consulta_nums)
-            marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
+        way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
+        marcas_por_way: dict[int, list[MarcaNumero]] = {}
+        if way_ids and trecho.tem_faixa():
+            consulta_nums = montar_consulta_numeros(way_ids)
+            if consulta_nums:
+                resp_nums = consultar_overpass(sessao, consulta_nums)
+                marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
 
-    geojson = overpass_para_geojson(
-        resposta, trechos=[trecho], marcas_por_way=marcas_por_way
-    )
-    features = geojson.get("features") or []
+        geojson = overpass_para_geojson(
+            resposta, trechos=[trecho], marcas_por_way=marcas_por_way
+        )
+        features = geojson.get("features") or []
+    except OverpassIndisponivel:
+        if trecho.tem_faixa():
+            raise ErroExterno(
+                "Serviço Overpass indisponível no momento. "
+                "Para cadastrar faixa por número, tente de novo mais tarde. "
+                "Ou cadastre a rua inteira (nº início e fim = 0)."
+            ) from None
+        features = buscar_features_nominatim(sessao, nome, trecho)
 
     if not features and not regex:
         return buscar_barreiras_rua(
