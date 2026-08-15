@@ -175,7 +175,7 @@ resultado é `relation` com `admin_level=8` (município, não o estado homônimo
 imprime o número na primeira execução — **anote aqui**, é constante:
 
 ```
-Relação OSM de São Paulo capital: ______  (área do Overpass = 3600000000 + relação)
+Relação OSM de São Paulo capital: 298285  (área do Overpass = 3600298285)
 ```
 
 Depois use `--relacao-id <número>` para pular a consulta ao Nominatim.
