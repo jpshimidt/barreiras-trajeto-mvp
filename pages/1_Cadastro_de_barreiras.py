@@ -60,6 +60,11 @@ def _secao_nova_barreira() -> None:
         "Deixe os números em branco (ou 0) para cadastrar a **rua inteira**."
     )
 
+    pendente = st.session_state.pop("_nova_aplicar_sugestao", None)
+    if pendente:
+        st.session_state["nova_entrada"] = pendente
+        st.session_state.pop("nova_sugestoes", None)
+
     entrada = st.text_input(
         "Endereço ou nome da rua",
         key="nova_entrada",
@@ -76,16 +81,11 @@ def _secao_nova_barreira() -> None:
                 st.error(str(e))
         sugestoes = st.session_state.get("nova_sugestoes") or []
         if sugestoes:
-            escolha = st.radio(
-                "Sugestões (opcional)",
-                [s["texto"] for s in sugestoes],
-                key="nova_sugestao_escolhida",
-                index=None,
-            )
-            if escolha:
-                st.session_state["nova_entrada"] = escolha
-                st.session_state.pop("nova_sugestoes", None)
-                st.rerun()
+            st.caption("Sugestões (opcional) — clique para usar no campo acima:")
+            for indice, sug in enumerate(sugestoes):
+                if st.button(sug["texto"], key=f"nova_sug_btn_{indice}", type="secondary"):
+                    st.session_state["_nova_aplicar_sugestao"] = sug["texto"]
+                    st.rerun()
 
     col1, col2, col3 = st.columns(3)
     with col1:
