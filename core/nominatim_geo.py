@@ -93,6 +93,8 @@ def local_de_nominatim(
             lon=lon,
             confianca=resultado.get("importance"),
             adequacao=pontuar_candidato(props, endereco),
+            numero_informado=None,
+            numero_confirmado=True,
         ),
         endereco,
         props,

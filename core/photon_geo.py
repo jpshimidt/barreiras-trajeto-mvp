@@ -65,6 +65,8 @@ def local_de_photon(feature: dict, consulta: str, endereco: EnderecoMaps) -> Loc
             lon=float(lon),
             confianca=0.7,
             adequacao=pontuar_candidato(props_norm, endereco),
+            numero_informado=None,
+            numero_confirmado=True,
         ),
         endereco,
         props_norm,

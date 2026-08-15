@@ -318,6 +318,8 @@ def local_de_feature(
         lon=float(lon),
         confianca=props.get("confidence"),
         adequacao=adequacao,
+        numero_informado=None,
+        numero_confirmado=True,
     )
     return _completar_local(local, endereco, props) if endereco else local
 
