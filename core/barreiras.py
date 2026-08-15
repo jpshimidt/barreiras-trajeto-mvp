@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
 from core.erros import ErroExterno
@@ -15,6 +13,17 @@ from core.recorte_trecho import rotulo_trecho
 from core.routing import Rota
 
 BUFFER_M_PADRAO = 5.0
+
+TIPOS_BARREIRA = [
+    "via expressa",
+    "acesso de via expressa",
+    "avenida",
+    "acesso de avenida",
+    "rua",
+    "rodovia",
+    "acesso de rodovia",
+    "(sem tipo)",
+]
 
 # ~1,1 km em graus. Descarta barreiras longe da rota antes de projetar — uma via
 # como a Marginal sozinha traz milhares de vértices, e projetar tudo custa caro.
@@ -49,39 +58,14 @@ def carregar_barreiras(caminho: str | Path) -> list[Barreira]:
     barreira: um cadastro vazio produziria "sem direito" para todo mundo, em
     silêncio, e isso não pode passar por resposta válida.
     """
+    from core.barreiras_geojson import barreiras_de_geojson, texto_para_geojson
+
     caminho = Path(caminho)
     try:
-        with open(caminho, encoding="utf-8") as f:
-            colecao = json.load(f)
+        texto = caminho.read_text(encoding="utf-8")
     except FileNotFoundError as e:
         raise ErroExterno(f"Arquivo de barreiras não encontrado: {caminho}") from e
-    except json.JSONDecodeError as e:
-        raise ErroExterno(f"Arquivo de barreiras não é JSON válido: {caminho} — {e}") from e
-
-    barreiras: list[Barreira] = []
-    for i, feature in enumerate(colecao.get("features") or []):
-        geometria = feature.get("geometry")
-        if not geometria:
-            continue
-        geom = shape(geometria)
-        if geom.is_empty:
-            continue
-        props = feature.get("properties") or {}
-        barreiras.append(
-            Barreira(
-                id=str(props.get("id") or f"feature-{i}"),
-                nome=props.get("nome") or "(sem nome)",
-                tipo=props.get("tipo") or "(sem tipo)",
-                geometria=geom,
-                numero_inicio=_int_ou_none(props.get("numero_inicio")),
-                numero_fim=_int_ou_none(props.get("numero_fim")),
-                paridade=props.get("paridade") or None,
-            )
-        )
-
-    if not barreiras:
-        raise ErroExterno(f"Nenhuma barreira utilizável em {caminho}")
-    return barreiras
+    return barreiras_de_geojson(texto_para_geojson(texto))
 
 
 def proximas_da_rota(

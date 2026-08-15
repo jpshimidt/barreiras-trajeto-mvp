@@ -94,3 +94,25 @@ def exigir_login() -> bool:
         st.info("Faça login para usar a consulta de elegibilidade.")
     st.stop()
     return False
+
+
+def admin_usernames() -> set[str]:
+    """Usuários autorizados a editar o cadastro de barreiras."""
+    config = _config_auth() or {}
+    brutos = config.get("admin_usernames") or []
+    if isinstance(brutos, str):
+        brutos = [brutos]
+    return {str(u).strip() for u in brutos if str(u).strip()}
+
+
+def usuario_e_admin() -> bool:
+    usuario = st.session_state.get("username")
+    return bool(usuario and usuario in admin_usernames())
+
+
+def exigir_admin() -> None:
+    """Login + perfil administrador (cadastro de barreiras)."""
+    exigir_login()
+    if not usuario_e_admin():
+        st.error("Acesso restrito a administradores do cadastro de barreiras.")
+        st.stop()

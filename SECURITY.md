@@ -2,6 +2,29 @@
 
 Este repositório é **público**. Nunca commite segredos.
 
+## Cadastro de barreiras (CRUD)
+
+O disco do Streamlit Cloud é **efêmero** — gravações locais somem no redeploy.
+
+**Solução adotada (custo zero):** GitHub Contents API grava `dados/barreiras.geojson` no repositório.
+
+```toml
+[github_barreiras]
+token = "ghp_..."          # PAT com permissão de escrita no repo
+repo = "usuario/barreiras-trajeto-mvp"
+path = "dados/barreiras.geojson"
+branch = "main"
+
+[auth]
+admin_usernames = ["admin"]  # só estes usuários acessam a página de CRUD
+```
+
+- Página **Gerenciar barreiras** (menu lateral, só para admins)
+- Histórico e backup automáticos via Git
+- Sem banco de dados externo
+
+**Alternativa futura:** Supabase (PostgreSQL gratuito) se o CRUD via Git ficar limitado.
+
 ## O que NÃO vai no Git
 
 - `.streamlit/secrets.toml` (já está no `.gitignore`)
@@ -17,6 +40,7 @@ Configure em **Settings → Secrets**:
 | `ORS_API_KEY` | Rotas a pé (server) | Cota diária; só backend |
 | `GOOGLE_MAPS_API_KEY` | Geocoding / Places server | IP ou sem referrer web |
 | `GOOGLE_MAPS_JS_KEY` | Autocomplete no navegador | HTTP referrer `*.streamlit.app` |
+| `github_barreiras.token` | CRUD do cadastro | PAT com escopo mínimo (`repo` ou Contents) |
 | `[auth]` | Login | Senhas em **hash bcrypt** |
 
 ### Google Maps — duas chaves

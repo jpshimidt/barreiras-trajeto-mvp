@@ -20,12 +20,13 @@ from core.barreiras import (
     BUFFER_M_PADRAO,
     Barreira,
     barreiras_atingidas,
-    carregar_barreiras,
     proximas_da_rota,
 )
+from core.barreiras_cache import barreiras_carregadas
+from core.barreiras_store import descricao_store, obter_store
 from core.decisao import decidir
 from core.erros import ErroExterno
-from core.auth_app import exigir_login
+from core.auth_app import exigir_login, usuario_e_admin
 from core.endereco_maps import (
     EXEMPLO_ENDERECO_MAPS,
     Local,
@@ -60,13 +61,14 @@ st.set_page_config(page_title="Transporte escolar — elegibilidade", page_icon=
 # --------------------------------------------------------------------------- #
 
 
-@st.cache_resource(show_spinner="Carregando o cadastro de barreiras...")
+@st.cache_resource(show_spinner=False)
+def _store_barreiras():
+    return obter_store(ARQUIVO_BARREIRAS)
+
+
 def barreiras_do_cadastro() -> list[Barreira]:
-    """
-    Carregado uma vez por processo. `cache_resource` guarda o CADASTRO, que é
-    público e versionado no Git — nada de dado pessoal entra aqui.
-    """
-    return carregar_barreiras(ARQUIVO_BARREIRAS)
+    """Cadastro público de barreiras (cache compartilhado com a página admin)."""
+    return barreiras_carregadas(ARQUIVO_BARREIRAS)
 
 
 def _ler_api_key_ors() -> str | None:
@@ -409,6 +411,12 @@ def pagina_principal() -> None:
         )
         st.divider()
         _status_integracoes()
+        try:
+            st.caption(f"Cadastro: {descricao_store(_store_barreiras())}")
+        except Exception:
+            pass
+        if usuario_e_admin():
+            st.page_link("pages/1_Cadastro_de_barreiras.py", label="🛠️ Gerenciar barreiras")
         st.divider()
         st.caption(
             "Protótipo de validação da regra. Nenhuma consulta é gravada: sem log, "
