@@ -39,12 +39,17 @@ def _store():
 
 
 def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira | None:
-    with st.form(f"form_{chave}", clear_on_submit=barreira is None):
-        nome = st.text_input("Nome da via", value=barreira.nome if barreira else "")
+    with st.form(f"form_{chave}", clear_on_submit=False):
+        nome = st.text_input(
+            "Nome da via",
+            value=barreira.nome if barreira else "",
+            key=f"{chave}_nome",
+        )
         tipo = st.selectbox(
             "Tipo",
             TIPOS_BARREIRA,
             index=TIPOS_BARREIRA.index(barreira.tipo) if barreira and barreira.tipo in TIPOS_BARREIRA else 0,
+            key=f"{chave}_tipo",
         )
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -53,6 +58,7 @@ def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira |
                 min_value=0,
                 value=(barreira.numero_inicio or 0) if barreira else 0,
                 step=1,
+                key=f"{chave}_num_inicio",
             )
         with col2:
             numero_fim = st.number_input(
@@ -60,6 +66,7 @@ def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira |
                 min_value=0,
                 value=(barreira.numero_fim or 0) if barreira else 0,
                 step=1,
+                key=f"{chave}_num_fim",
             )
         with col3:
             paridade = st.selectbox(
@@ -70,6 +77,7 @@ def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira |
                     if barreira and barreira.paridade in {"", "ambos", "par", "impar"}
                     else 0
                 ),
+                key=f"{chave}_paridade",
             )
 
         coords_padrao = ""
@@ -83,6 +91,7 @@ def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira |
             height=120,
             help="Coordenadas `[[lon, lat], ...]` em EPSG:4326. Desenhe no geojson.io e cole aqui.",
             placeholder="[[-46.63, -23.51], [-46.62, -23.51]]",
+            key=f"{chave}_geometria",
         )
 
         enviado = st.form_submit_button("Salvar", type="primary")
