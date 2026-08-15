@@ -398,21 +398,32 @@ def geocodificar(texto: str, api_key: str | None = None, cep: str | None = None)
   endereços brasileiros colados do Google Maps. ORS/Pelias entra só como
     reforço quando o Nominatim não devolve nada útil.
     """
-    from core.nominatim_geo import buscar_nominatim, consultas_nominatim
+    from core.nominatim_geo import NominatimRateLimited, buscar_nominatim, consultas_nominatim
 
     endereco = parse_endereco_maps(texto)
     consulta = montar_consulta(texto, cep)
     vistos: set[tuple[float, float, str]] = set()
     locais: list[Local] = []
+    nominatim_indisponivel = False
 
     for q in consultas_nominatim(endereco) or [consulta]:
-        for item in buscar_nominatim(q):
+        if nominatim_indisponivel:
+            break
+        try:
+            resultados = buscar_nominatim(q)
+        except NominatimRateLimited:
+            nominatim_indisponivel = True
+            break
+        for item in resultados:
             for local in _locais_de_resultados([item], q, endereco, origem="nominatim"):
                 chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
                 if chave in vistos:
                     continue
                 vistos.add(chave)
                 locais.append(local)
+        locais = _ordenar_candidatos(locais)
+        if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:
+            return locais
 
     locais = _ordenar_candidatos(locais)
     if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:

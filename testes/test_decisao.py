@@ -464,6 +464,60 @@ def test_local_de_nominatim_converte_resposta_osm():
     assert (local.adequacao or 0) >= 60
 
 
+def test_consulta_nominatim_principal_prefere_numero_primeiro():
+    from core.nominatim_geo import consulta_nominatim_principal
+
+    endereco = EnderecoMaps(
+        texto="Rua Borges, 353 - Parada Inglesa, São paulo, 02247000",
+        logradouro="Rua Borges",
+        numero="353",
+        bairro="Parada Inglesa",
+        cidade="São Paulo",
+        uf="SP",
+        cep="02247-000",
+    )
+    assert consulta_nominatim_principal(endereco) == (
+        "353 Rua Borges, Parada Inglesa, São Paulo, SP, 02247-000"
+    )
+
+
+def test_geocodificar_cai_no_ors_quando_nominatim_limita(monkeypatch):
+    from core.nominatim_geo import NominatimRateLimited
+
+    def nominatim_bloqueado(*args, **kwargs):
+        raise NominatimRateLimited("HTTP 429")
+
+    def ors_fake(consulta, api_key, cep=None):
+        return [
+            {
+                "geometry": {"coordinates": [LON, LAT]},
+                "properties": {
+                    "label": "353, Rua Borges, Parada Inglesa, São Paulo",
+                    "locality": "São Paulo",
+                    "street": "Rua Borges",
+                    "housenumber": "353",
+                    "postalcode": "02247-000",
+                    "neighbourhood": "Parada Inglesa",
+                    "confidence": 0.9,
+                    "layer": "address",
+                },
+            }
+        ]
+
+    import core.endereco_maps as em
+    import core.nominatim_geo as ng
+
+    monkeypatch.setattr(ng, "buscar_nominatim", nominatim_bloqueado)
+    monkeypatch.setattr(em, "_buscar_ors", ors_fake)
+
+    candidatos = em.geocodificar(
+        "Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000",
+        "chave-teste",
+    )
+    assert candidatos
+    assert "Rua Borges" in candidatos[0].endereco_formatado
+
+
 def test_candidato_sem_municipio_passa():
     """Filtrar demais custaria endereços válidos; o rótulo ainda vai à conferência."""
     assert local_de_feature(

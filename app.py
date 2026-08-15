@@ -181,11 +181,21 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
             f"— {endereco.bairro} — CEP {endereco.cep}"
         )
 
-    try:
-        candidatos = geocodificar(texto, _ler_api_key_ors())
-    except ErroExterno as e:
-        st.error(str(e))
+    if not (endereco.logradouro and endereco.numero and endereco.bairro and endereco.cep):
         return None
+
+    cache_key = f"{chave}_candidatos"
+    texto_normalizado = " ".join(texto.strip().split())
+    if st.session_state.get(f"{chave}_texto_cache") == texto_normalizado:
+        candidatos = st.session_state[cache_key]
+    else:
+        try:
+            candidatos = geocodificar(texto, _ler_api_key_ors())
+        except ErroExterno as e:
+            st.error(str(e))
+            return None
+        st.session_state[f"{chave}_texto_cache"] = texto_normalizado
+        st.session_state[cache_key] = candidatos
 
     resolucao = resolver_geocodificacao(texto, candidatos)
     if resolucao.local and resolucao.automatico:
