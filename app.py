@@ -1,8 +1,8 @@
 """
 Interface do app de elegibilidade a transporte escolar — São Paulo capital.
 
-Protótipo de validação da regra. NÃO PERSISTE NADA: sem log, sem histórico, sem
-analytics. Os endereços vivem só na sessão do navegador de quem está usando.
+Protótipo de validação da regra. Endereços informados ficam na sessão Streamlit
+no servidor até logout ou fim da sessão — não há banco de dados nem analytics.
 
     streamlit run app.py
 """
@@ -22,11 +22,12 @@ from core.barreiras import (
     barreiras_atingidas,
     proximas_da_rota,
 )
-from core.barreiras_cache import barreiras_carregadas
-from core.barreiras_store import descricao_store, obter_store
+from core.barreiras_cache import barreiras_carregadas, descricao_cadastro
 from core.decisao import decidir
 from core.erros import ErroExterno
+from core.geo_limites import exigir_coordenada_em_sao_paulo
 from core.auth_app import exigir_login, usuario_e_admin
+from core.rate_limit import consumir_calculo, consumir_geocodificacao
 from core.endereco_maps import (
     EXEMPLO_ENDERECO_MAPS,
     Local,
@@ -37,8 +38,6 @@ from core.endereco_maps import (
 from core.google_geo import (
     chave_google_para_widget,
     extrair_coordenadas_maps_url,
-    ler_google_api_key,
-    ler_google_maps_js_key,
     local_de_selecao_widget,
 )
 from core.routing import Rota, rota_a_pe
@@ -59,11 +58,6 @@ st.set_page_config(page_title="Transporte escolar — elegibilidade", page_icon=
 # --------------------------------------------------------------------------- #
 # Recursos
 # --------------------------------------------------------------------------- #
-
-
-@st.cache_resource(show_spinner=False)
-def _store_barreiras():
-    return obter_store(ARQUIVO_BARREIRAS)
 
 
 def barreiras_do_cadastro() -> list[Barreira]:
@@ -194,20 +188,13 @@ def _limpar_resultado_se_entrada_mudou(
 def _status_integracoes() -> None:
     """Indicadores discretos de quais APIs estão configuradas."""
     google_js = bool(chave_google_para_widget() and google_places_input is not None)
-    google_srv = bool(ler_google_api_key())
     ors_ok = bool(_ler_api_key_ors())
     st.caption(
         f"{'✅' if google_js else '⚠️'} Google Autocomplete · "
         f"{'✅' if ors_ok else '⚠️'} OpenRouteService (rotas)"
     )
     if not google_js:
-        st.caption(
-            "Configure `GOOGLE_MAPS_JS_KEY` (referrer `*.streamlit.app`) para busca no app."
-        )
-    elif google_srv and not ler_google_maps_js_key():
-        st.caption(
-            "⚠️ Usando chave server-side no widget — crie `GOOGLE_MAPS_JS_KEY` separada."
-        )
+        st.caption("Configure `GOOGLE_MAPS_JS_KEY` (referrer `*.streamlit.app`).")
     if not ors_ok:
         st.caption("Sem chave ORS: cálculo de rota não funciona.")
 
@@ -235,19 +222,24 @@ def campo_endereco_google(rotulo: str, chave: str, exemplo: str, api_key: str) -
             coords = extrair_coordenadas_maps_url(link.strip())
             if coords:
                 lat, lon = coords
-                st.caption(f"Coordenadas do link: {lat:.6f}, {lon:.6f}")
-                if st.button("Usar este pin do link", key=f"{chave}_usar_link"):
-                    local = Local(
-                        texto_original=link.strip(),
-                        endereco_formatado=link.strip(),
-                        lat=lat,
-                        lon=lon,
-                        confianca=0.5,
-                        adequacao=40,
-                        numero_informado=None,
-                        numero_confirmado=False,
-                    )
-                    st.session_state[f"{chave}_local"] = local
+                try:
+                    exigir_coordenada_em_sao_paulo(lat, lon)
+                except ErroExterno as e:
+                    st.error(str(e))
+                else:
+                    st.caption(f"Coordenadas do link: {lat:.6f}, {lon:.6f}")
+                    if st.button("Usar este pin do link", key=f"{chave}_usar_link"):
+                        local = Local(
+                            texto_original=link.strip(),
+                            endereco_formatado=link.strip(),
+                            lat=lat,
+                            lon=lon,
+                            confianca=0.5,
+                            adequacao=40,
+                            numero_informado=None,
+                            numero_confirmado=False,
+                        )
+                        st.session_state[f"{chave}_local"] = local
             else:
                 st.warning("Não foi possível ler coordenadas deste link.")
 
@@ -323,16 +315,34 @@ def campo_endereco_colado(rotulo: str, chave: str, exemplo: str) -> Local | None
 
     cache_key = f"{chave}_candidatos"
     texto_normalizado = " ".join(texto.strip().split())
-    if st.session_state.get(f"{chave}_texto_cache") == texto_normalizado:
-        candidatos = st.session_state[cache_key]
-    else:
-        try:
-            candidatos = geocodificar(texto, _ler_api_key_ors())
-        except ErroExterno as e:
-            st.error(str(e))
+    buscar = st.button("Buscar endereço", key=f"{chave}_buscar", type="secondary")
+
+    if buscar or st.session_state.get(f"{chave}_texto_cache") == texto_normalizado:
+        if buscar:
+            try:
+                consumir_geocodificacao()
+            except ErroExterno as e:
+                st.error(str(e))
+                return None
+            try:
+                candidatos = geocodificar(texto, _ler_api_key_ors())
+            except ErroExterno as e:
+                st.error(str(e))
+                return None
+            st.session_state[f"{chave}_texto_cache"] = texto_normalizado
+            st.session_state[cache_key] = candidatos
+        elif st.session_state.get(f"{chave}_texto_cache") == texto_normalizado:
+            candidatos = st.session_state.get(cache_key, [])
+        else:
+            st.info("Clique em **Buscar endereço** para localizar no mapa.")
             return None
-        st.session_state[f"{chave}_texto_cache"] = texto_normalizado
-        st.session_state[cache_key] = candidatos
+    else:
+        st.info("Clique em **Buscar endereço** para localizar no mapa.")
+        return None
+
+    if not candidatos:
+        st.error("Nenhum resultado para este endereço.")
+        return None
 
     resolucao = resolver_geocodificacao(texto, candidatos)
     if resolucao.local and resolucao.automatico:
@@ -393,8 +403,13 @@ def pagina_principal() -> None:
             nomes = sorted({b.nome for b in barreiras})
             st.metric("Ruas cadastradas", len(nomes))
             st.caption(f"{len(barreiras)} trechos no total")
-            for barreira in sorted(barreiras, key=lambda b: b.rotulo):
-                st.write(f"• {barreira.rotulo}")
+            busca = st.text_input("Buscar no cadastro", key="busca_barreira", placeholder="Nome da via...")
+            if busca.strip():
+                filtradas = [b for b in barreiras if busca.lower() in b.rotulo.lower()][:25]
+                for barreira in sorted(filtradas, key=lambda b: b.rotulo):
+                    st.write(f"• {barreira.rotulo}")
+                if len(filtradas) == 25:
+                    st.caption("Mostrando no máximo 25 resultados — refine a busca.")
         except ErroExterno as e:
             st.error(str(e))
             st.stop()
@@ -412,15 +427,15 @@ def pagina_principal() -> None:
         st.divider()
         _status_integracoes()
         try:
-            st.caption(f"Cadastro: {descricao_store(_store_barreiras())}")
+            st.caption(f"Cadastro: {descricao_cadastro(ARQUIVO_BARREIRAS)}")
         except Exception:
             pass
         if usuario_e_admin():
             st.page_link("pages/1_Cadastro_de_barreiras.py", label="🛠️ Gerenciar barreiras")
         st.divider()
         st.caption(
-            "Protótipo de validação da regra. Nenhuma consulta é gravada: sem log, "
-            "sem histórico, sem analytics."
+            "Endereços ficam na sessão do servidor até logout. "
+            "Sem banco de dados nem histórico de consultas."
         )
 
     esquerda, direita = st.columns(2)
@@ -445,6 +460,11 @@ def pagina_principal() -> None:
 
     calcular = st.button("Calcular", type="primary", disabled=not (casa and escola))
     if calcular and casa and escola:
+        try:
+            consumir_calculo()
+        except ErroExterno as e:
+            st.error(str(e))
+            return
         fingerprint = _fingerprint_calculo(casa, escola, escolheu)
         try:
             if escolheu:

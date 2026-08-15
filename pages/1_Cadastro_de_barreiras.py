@@ -12,9 +12,9 @@ import streamlit as st
 
 from core.auth_app import exigir_admin
 from core.barreiras import Barreira, TIPOS_BARREIRA
-from core.barreiras_cache import invalidar_cache_barreiras
+from core.barreiras_cache import invalidar_cache_barreiras, store_barreiras
 from core.barreiras_geojson import geometria_de_coords_json
-from core.barreiras_store import descricao_store, obter_store
+from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
 
 ARQUIVO_BARREIRAS = Path(__file__).resolve().parent.parent / "dados" / "barreiras.geojson"
@@ -35,7 +35,7 @@ def _novo_id(nome: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def _store():
-    return obter_store(ARQUIVO_BARREIRAS)
+    return store_barreiras(ARQUIVO_BARREIRAS)
 
 
 def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira | None:
@@ -134,7 +134,6 @@ for barreira in sorted(barreiras, key=lambda b: b.rotulo):
             try:
                 store.remover(barreira.id, mensagem=f"Cadastro: remover {barreira.rotulo}")
                 invalidar_cache_barreiras()
-                _store.clear()
                 st.success("Barreira removida.")
                 st.rerun()
             except ErroExterno as e:
@@ -144,7 +143,6 @@ for barreira in sorted(barreiras, key=lambda b: b.rotulo):
             try:
                 store.atualizar(editada, mensagem=f"Cadastro: atualizar {editada.rotulo}")
                 invalidar_cache_barreiras()
-                _store.clear()
                 st.success("Barreira atualizada.")
                 st.rerun()
             except ErroExterno as e:
@@ -157,7 +155,6 @@ if nova:
     try:
         store.criar(nova, mensagem=f"Cadastro: criar {nova.rotulo}")
         invalidar_cache_barreiras()
-        _store.clear()
         st.success("Barreira criada.")
         st.rerun()
     except ErroExterno as e:

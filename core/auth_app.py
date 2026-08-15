@@ -8,7 +8,9 @@ from typing import Any
 import streamlit as st
 import streamlit_authenticator as stauth
 
-from core.seguranca import cookie_key_segura, em_ambiente_streamlit_cloud, senha_parece_hash
+from core.rate_limit import registrar_tentativa_login_falha
+from core.seguranca import cookie_key_segura, senha_parece_hash
+from core.sessao_privada import limpar_dados_pessoais_sessao
 
 
 def _config_auth() -> dict[str, Any] | None:
@@ -21,19 +23,30 @@ def _config_auth() -> dict[str, Any] | None:
 
 
 def _validar_credenciais(credenciais: dict[str, Any]) -> None:
-    """Recusa configuração insegura em produção (Streamlit Cloud)."""
-    if not em_ambiente_streamlit_cloud():
-        return
-
+    """Recusa senhas em texto puro — sempre exige hash bcrypt."""
     usernames = (credenciais.get("usernames") or {}).values()
     for usuario in usernames:
         senha = str(usuario.get("password", ""))
         if senha and not senha_parece_hash(senha):
             st.error(
                 "Senha em texto puro detectada nos Secrets. "
-                "Gere um hash bcrypt e substitua o campo `password` antes de publicar."
+                "Gere um hash bcrypt e substitua o campo `password`."
             )
             st.stop()
+
+
+def admin_usernames() -> set[str]:
+    """Usuários autorizados a editar o cadastro de barreiras."""
+    config = _config_auth() or {}
+    brutos = config.get("admin_usernames") or []
+    if isinstance(brutos, str):
+        brutos = [brutos]
+    return {str(u).strip() for u in brutos if str(u).strip()}
+
+
+def usuario_e_admin() -> bool:
+    usuario = st.session_state.get("username")
+    return bool(usuario and usuario in admin_usernames())
 
 
 def exigir_login() -> bool:
@@ -42,6 +55,8 @@ def exigir_login() -> bool:
 
     Credenciais em secrets.toml / Streamlit Cloud Secrets, seção [auth].
     """
+    autenticado_antes = bool(st.session_state.get("authentication_status"))
+
     config = _config_auth()
     if not config:
         st.error(
@@ -82,32 +97,27 @@ def exigir_login() -> bool:
 
     authenticator.login(location="main", key="login_form")
 
-    if st.session_state.get("authentication_status"):
+    autenticado_agora = bool(st.session_state.get("authentication_status"))
+    if autenticado_antes and not autenticado_agora:
+        limpar_dados_pessoais_sessao()
+
+    if autenticado_agora:
         with st.sidebar:
             authenticator.logout(location="sidebar", key="logout_btn")
             st.caption(f"Logado como **{st.session_state.get('name', '')}**")
         return True
 
     if st.session_state.get("authentication_status") is False:
+        try:
+            registrar_tentativa_login_falha()
+        except Exception as e:
+            st.error(str(e))
+            st.stop()
         st.error("Usuário ou senha incorretos.")
     else:
         st.info("Faça login para usar a consulta de elegibilidade.")
     st.stop()
     return False
-
-
-def admin_usernames() -> set[str]:
-    """Usuários autorizados a editar o cadastro de barreiras."""
-    config = _config_auth() or {}
-    brutos = config.get("admin_usernames") or []
-    if isinstance(brutos, str):
-        brutos = [brutos]
-    return {str(u).strip() for u in brutos if str(u).strip()}
-
-
-def usuario_e_admin() -> bool:
-    usuario = st.session_state.get("username")
-    return bool(usuario and usuario in admin_usernames())
 
 
 def exigir_admin() -> None:

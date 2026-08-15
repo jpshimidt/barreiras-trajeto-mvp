@@ -11,8 +11,11 @@ from shapely.geometry.base import BaseGeometry
 
 from core.barreiras import Barreira, _int_ou_none
 from core.erros import ErroExterno
+from core.geo_limites import coordenada_em_sao_paulo
 
 MUNICIPIO_PADRAO = "São Paulo"
+MAX_GEOM_JSON_CHARS = 50_000
+MAX_VERTICES_LINHA = 500
 
 
 def barreira_de_feature(feature: dict, indice: int = 0) -> Barreira | None:
@@ -88,11 +91,31 @@ def texto_para_geojson(texto: str) -> dict:
 
 def geometria_de_coords_json(texto: str) -> BaseGeometry:
     """Aceita coordenadas ``[[lon, lat], ...]`` ou um Feature/Geometry GeoJSON."""
-    bruto = json.loads(texto)
+    if len(texto) > MAX_GEOM_JSON_CHARS:
+        raise ErroExterno(f"Geometria muito grande (máx. {MAX_GEOM_JSON_CHARS} caracteres).")
+    try:
+        bruto = json.loads(texto)
+    except json.JSONDecodeError as e:
+        raise ErroExterno(f"JSON inválido: {e}") from e
+
     if isinstance(bruto, list):
-        return shape({"type": "LineString", "coordinates": bruto})
-    if isinstance(bruto, dict):
+        geom = shape({"type": "LineString", "coordinates": bruto})
+    elif isinstance(bruto, dict):
         if bruto.get("type") == "Feature":
-            return shape(bruto["geometry"])
-        return shape(bruto)
-    raise ErroExterno("Formato de geometria não reconhecido — use [[lon, lat], ...] ou GeoJSON.")
+            geom = shape(bruto["geometry"])
+        else:
+            geom = shape(bruto)
+    else:
+        raise ErroExterno("Formato de geometria não reconhecido — use [[lon, lat], ...] ou GeoJSON.")
+
+    if geom.geom_type != "LineString":
+        raise ErroExterno(f"Apenas LineString é aceita (recebido: {geom.geom_type}).")
+    if len(geom.coords) < 2:
+        raise ErroExterno("A linha precisa de pelo menos dois pontos.")
+    if len(geom.coords) > MAX_VERTICES_LINHA:
+        raise ErroExterno(f"Máximo de {MAX_VERTICES_LINHA} vértices por trecho.")
+
+    for lon, lat in geom.coords:
+        if not coordenada_em_sao_paulo(lat, lon):
+            raise ErroExterno("Todos os vértices devem estar dentro do município de São Paulo.")
+    return geom

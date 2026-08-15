@@ -63,12 +63,13 @@ class BarreirasStore(ABC):
         raise ErroExterno(f"Barreira {barreira.id!r} não encontrada")
 
     def remover(self, barreira_id: str, *, mensagem: str = "Cadastro: remover barreira") -> None:
-        barreiras = [b for b in self.listar() if b.id != barreira_id]
-        if len(barreiras) == len(self.listar()):
+        barreiras = self.listar()
+        novas = [b for b in barreiras if b.id != barreira_id]
+        if len(novas) == len(barreiras):
             raise ErroExterno(f"Barreira {barreira_id!r} não encontrada")
-        if not barreiras:
+        if not novas:
             raise ErroExterno("Não é permitido remover todas as barreiras — o cadastro ficaria vazio.")
-        self.salvar_todas(barreiras, mensagem=mensagem)
+        self.salvar_todas(novas, mensagem=mensagem)
 
 
 class ArquivoBarreirasStore(BarreirasStore):
@@ -120,7 +121,7 @@ class GitHubBarreirasStore(BarreirasStore):
                 f"(branch {self.config.branch})."
             )
         if resp.status_code != 200:
-            raise ErroExterno(f"GitHub respondeu HTTP {resp.status_code}: {resp.text[:200]}")
+            raise ErroExterno(f"GitHub indisponível (HTTP {resp.status_code}). Tente novamente.")
         dados = resp.json()
         conteudo = base64.b64decode(dados["content"]).decode("utf-8")
         return texto_para_geojson(conteudo), dados["sha"]
@@ -136,20 +137,30 @@ class GitHubBarreirasStore(BarreirasStore):
         if self._sha is None:
             _, self._sha = self._ler_remoto()
         colecao = geojson_de_barreiras(barreiras)
-        corpo = {
+        corpo_base = {
             "message": mensagem,
             "content": base64.b64encode(geojson_para_texto(colecao).encode("utf-8")).decode("ascii"),
             "branch": self.config.branch,
-            "sha": self._sha,
         }
         url = f"{GITHUB_API}/repos/{self.config.repo}/contents/{self.config.path}"
-        try:
-            resp = requests.put(url, headers=self._headers(), json=corpo, timeout=TIMEOUT_S)
-        except requests.RequestException as e:
-            raise ErroExterno(f"GitHub indisponível ao gravar: {e}") from e
-        if resp.status_code not in (200, 201):
-            raise ErroExterno(f"GitHub recusou a gravação HTTP {resp.status_code}: {resp.text[:300]}")
-        self._sha = resp.json()["content"]["sha"]
+
+        for tentativa in range(2):
+            corpo = {**corpo_base, "sha": self._sha}
+            try:
+                resp = requests.put(url, headers=self._headers(), json=corpo, timeout=TIMEOUT_S)
+            except requests.RequestException as e:
+                raise ErroExterno(f"GitHub indisponível ao gravar: {e}") from e
+            if resp.status_code in (200, 201):
+                self._sha = resp.json()["content"]["sha"]
+                return
+            if resp.status_code == 409 and tentativa == 0:
+                _, self._sha = self._ler_remoto()
+                continue
+            raise ErroExterno(
+                "Não foi possível gravar no GitHub "
+                f"(HTTP {resp.status_code}). "
+                "Outra edição pode ter ocorrido — recarregue a página e tente de novo."
+            )
 
 
 def _config_github() -> ConfigGitHub | None:

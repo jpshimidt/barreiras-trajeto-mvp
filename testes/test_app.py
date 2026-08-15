@@ -38,6 +38,8 @@ def app(monkeypatch):
     """Página com chave de brinquedo e serviços externos dublados."""
     monkeypatch.setenv("ORS_API_KEY", "chave-de-teste")
     monkeypatch.setattr("core.auth_app.exigir_login", lambda: True)
+    monkeypatch.setattr("core.rate_limit.consumir_calculo", lambda: None)
+    monkeypatch.setattr("core.rate_limit.consumir_geocodificacao", lambda: None)
 
     def geocode_falso(texto, api_key, cep=None):
         if "voluntários" in texto.lower():
@@ -49,10 +51,26 @@ def app(monkeypatch):
     return AppTest.from_file(APP, default_timeout=30)
 
 
+def _clicar_buscar_enderecos(at: AppTest) -> AppTest:
+    for btn in at.button:
+        if btn.label and "Buscar endereço" in btn.label:
+            btn.click()
+    return at.run()
+
+
+def _clicar_calcular(at: AppTest) -> AppTest:
+    for btn in at.button:
+        if btn.label == "Calcular":
+            btn.click()
+            break
+    return at.run()
+
+
 def preencher(at: AppTest) -> AppTest:
     at.text_input[0].set_value(EXEMPLO_ENDERECO_MAPS)
     at.text_input[1].set_value("Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000")
-    return at.run()
+    at = at.run()
+    return _clicar_buscar_enderecos(at)
 
 
 def texto_da_pagina(at: AppTest) -> str:
@@ -79,10 +97,12 @@ def test_cadastro_de_barreiras_aparece_na_lateral(app):
 
 def test_calcular_so_habilita_com_os_dois_enderecos(app):
     at = app.run()
-    assert at.button[0].disabled is True
+    calcular = next(b for b in at.button if b.label == "Calcular")
+    assert calcular.disabled is True
 
     at = preencher(at)
-    assert at.button[0].disabled is False
+    calcular = next(b for b in at.button if b.label == "Calcular")
+    assert calcular.disabled is False
 
 
 def test_endereco_formatado_volta_para_conferencia(app):
@@ -95,8 +115,7 @@ def test_endereco_formatado_volta_para_conferencia(app):
 
 def test_rota_que_atravessa_barreira_da_direito(app):
     at = preencher(app.run())
-    at.button[0].click()
-    at = at.run()
+    at = _clicar_calcular(at)
 
     assert not at.exception
     pagina = texto_da_pagina(at)
@@ -107,8 +126,7 @@ def test_rota_que_atravessa_barreira_da_direito(app):
 def test_resultado_permanece_apos_novo_rerun(app):
     """O mapa e outros widgets disparam rerun; o veredito não pode sumir."""
     at = preencher(app.run())
-    at.button[0].click()
-    at = at.run()
+    at = _clicar_calcular(at)
     assert "COM DIREITO" in texto_da_pagina(at)
 
     at = at.run()
@@ -118,8 +136,7 @@ def test_resultado_permanece_apos_novo_rerun(app):
 def test_rota_sem_barreira_nao_da_direito(app, monkeypatch):
     monkeypatch.setattr(core.routing, "rota_a_pe", lambda o, d, k: rota_entre(CASA, ESCOLA_PERTO))
     at = preencher(app.run())
-    at.button[0].click()
-    at = at.run()
+    at = _clicar_calcular(at)
 
     assert "SEM DIREITO" in texto_da_pagina(at)
     assert "não passa por nenhuma barreira" in texto_da_pagina(at)
@@ -139,8 +156,7 @@ def test_flag_da_escola_decide_sem_gastar_chamada_de_rota(app, monkeypatch):
     at = preencher(app.run())
     at.checkbox[0].set_value(True)
     at = at.run()
-    at.button[0].click()
-    at = at.run()
+    at = _clicar_calcular(at)
 
     assert not at.exception
     pagina = texto_da_pagina(at)
@@ -158,8 +174,7 @@ def test_falha_do_ors_nao_vira_sem_direito(app, monkeypatch):
     monkeypatch.setattr(core.routing, "rota_a_pe", cai)
 
     at = preencher(app.run())
-    at.button[0].click()
-    at = at.run()
+    at = _clicar_calcular(at)
 
     pagina = texto_da_pagina(at)
     assert "429" in pagina
@@ -186,4 +201,5 @@ def test_candidatos_empatados_viram_escolha_do_usuario(app, monkeypatch):
 
     assert at.radio
     assert "Perus" in str(at.radio[0].options)
-    assert at.button[0].disabled is True
+    calcular = next(b for b in at.button if b.label == "Calcular")
+    assert calcular.disabled is True
