@@ -56,17 +56,25 @@ def barreiras_do_cadastro() -> list[Barreira]:
     return carregar_barreiras(ARQUIVO_BARREIRAS)
 
 
+def _ler_api_key_ors() -> str | None:
+    """Chave ORS quando configurada; None se ausente (geocodificação segue via Nominatim)."""
+    try:
+        if "ORS_API_KEY" in st.secrets:
+            chave = str(st.secrets["ORS_API_KEY"]).strip()
+            if chave:
+                return chave
+    except Exception:
+        pass
+    chave = os.environ.get("ORS_API_KEY", "").strip()
+    return chave or None
+
+
 def obter_api_key() -> str:
     """
     No Streamlit Cloud a chave vem de Settings → Secrets; local, da variável de
     ambiente. `st.secrets` estoura quando não há arquivo nenhum, daí o try.
     """
-    try:
-        if "ORS_API_KEY" in st.secrets:
-            return str(st.secrets["ORS_API_KEY"]).strip()
-    except Exception:
-        pass
-    chave = os.environ.get("ORS_API_KEY", "").strip()
+    chave = _ler_api_key_ors()
     if not chave:
         raise ErroExterno(
             "Chave do OpenRouteService não configurada. "
@@ -174,7 +182,7 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
         )
 
     try:
-        candidatos = geocodificar(texto, obter_api_key())
+        candidatos = geocodificar(texto, _ler_api_key_ors())
     except ErroExterno as e:
         st.error(str(e))
         return None
