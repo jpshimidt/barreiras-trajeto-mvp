@@ -14,9 +14,9 @@ import pytest
 from shapely.geometry import LineString
 from streamlit.testing.v1 import AppTest
 
-import core.geocode
+import core.endereco_maps
 import core.routing
-from core.geocode import EXEMPLO_ENDERECO_MAPS, Local
+from core.endereco_maps import EXEMPLO_ENDERECO_MAPS, Local
 from core.routing import Rota
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -43,7 +43,7 @@ def app(monkeypatch):
             return [CASA]
         return [ESCOLA]
 
-    monkeypatch.setattr(core.geocode, "geocodificar", geocode_falso)
+    monkeypatch.setattr(core.endereco_maps, "geocodificar", geocode_falso)
     monkeypatch.setattr(core.routing, "rota_a_pe", lambda o, d, k: rota_entre(o, d))
     return AppTest.from_file(APP, default_timeout=30)
 
@@ -168,7 +168,7 @@ def test_sem_cep_avisa(app):
 def test_candidatos_empatados_viram_escolha_do_usuario(app, monkeypatch):
     """Em SP nome de rua repete entre distritos; a página não pode escolher sozinha."""
     outro = Local("casa", "R. Voluntários da Pátria — Perus", -23.40, -46.75, 0.88, adequacao=95)
-    monkeypatch.setattr(core.geocode, "geocodificar", lambda t, k, c=None: [CASA, outro])
+    monkeypatch.setattr(core.endereco_maps, "geocodificar", lambda t, k, c=None: [CASA, outro])
 
     at = preencher(app.run())
 
