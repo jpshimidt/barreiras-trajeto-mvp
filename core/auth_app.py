@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -14,28 +13,53 @@ from core.seguranca import cookie_key_segura, senha_parece_hash
 from core.sessao_privada import limpar_dados_pessoais_sessao
 
 
-def _plain_dict(valor: Any) -> Any:
-    """Converte SecretDict / AttrDict em dict/list Python mutável."""
-    return json.loads(json.dumps(valor, default=str))
+def _to_plain_dict(valor: Any) -> Any:
+    """
+    Converte SecretDict / AttrDict do Streamlit em dict Python mutável.
+
+    Evita json.dumps — objetos internos dos secrets viram string e quebram .get().
+    """
+    if valor is None or isinstance(valor, (str, int, float, bool)):
+        return valor
+    if isinstance(valor, dict):
+        return {str(k): _to_plain_dict(v) for k, v in valor.items()}
+    if isinstance(valor, (list, tuple)):
+        return [_to_plain_dict(v) for v in valor]
+    if hasattr(valor, "keys"):
+        try:
+            return {str(k): _to_plain_dict(valor[k]) for k in valor.keys()}
+        except Exception:
+            pass
+    return valor
 
 
 def _config_auth() -> dict[str, Any] | None:
     try:
         if "auth" not in st.secrets:
             return None
-        return _plain_dict(dict(st.secrets["auth"]))
+        return _to_plain_dict(st.secrets["auth"])
     except Exception:
         return None
 
 
-def _credenciais_mutaveis(config: dict[str, Any]) -> dict[str, Any]:
+def _credenciais_mutaveis() -> dict[str, Any]:
     """Credenciais desacopladas de st.secrets para o streamlit-authenticator."""
-    credenciais = _plain_dict(config.get("credentials") or {})
+    try:
+        credenciais = _to_plain_dict(st.secrets["auth"]["credentials"])
+    except Exception:
+        return {"usernames": {}}
+
+    if not isinstance(credenciais, dict):
+        return {"usernames": {}}
+
     usernames = credenciais.get("usernames") or {}
+    if not isinstance(usernames, dict):
+        return {"usernames": {}}
+
     return {
         "usernames": {
-            str(usuario): _plain_dict(dados)
-            for usuario, dados in dict(usernames).items()
+            str(usuario): _to_plain_dict(dados)
+            for usuario, dados in usernames.items()
         }
     }
 
@@ -44,6 +68,8 @@ def _validar_credenciais(credenciais: dict[str, Any]) -> None:
     """Recusa senhas em texto puro — sempre exige hash bcrypt."""
     usernames = (credenciais.get("usernames") or {}).values()
     for usuario in usernames:
+        if not isinstance(usuario, dict):
+            continue
         senha = str(usuario.get("password", ""))
         if senha and not senha_parece_hash(senha):
             st.error(
@@ -84,7 +110,7 @@ def exigir_login() -> bool:
         st.stop()
         return False
 
-    credenciais = _credenciais_mutaveis(config)
+    credenciais = _credenciais_mutaveis()
     if not credenciais.get("usernames"):
         st.error("Seção `[auth.credentials]` ausente ou vazia nos Secrets.")
         st.stop()
@@ -92,7 +118,9 @@ def exigir_login() -> bool:
 
     _validar_credenciais(credenciais)
 
-    cookie = _plain_dict(config.get("cookie") or {})
+    cookie = config.get("cookie") or {}
+    if not isinstance(cookie, dict):
+        cookie = {}
     cookie_key = (
         str(cookie.get("key") or "")
         or str(config.get("cookie_key") or "")
