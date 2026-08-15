@@ -10,6 +10,7 @@ analytics. Os endereços vivem só na sessão do navegador de quem está usando.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import folium
@@ -25,10 +26,19 @@ from core.barreiras import (
 )
 from core.decisao import decidir
 from core.erros import ErroExterno
-from core.geocode import EXEMPLO_ENDERECO_MAPS, Local, candidatos_ambiguos, geocodificar, parse_endereco_maps
+from core.geocode import Local, candidatos_ambiguos, geocodificar
 from core.routing import Rota, rota_a_pe
 
 ARQUIVO_BARREIRAS = Path(__file__).parent / "dados" / "barreiras.geojson"
+EXEMPLO_ENDERECO_MAPS = "R. Voluntários da Pátria, 1000 - Santana, São Paulo - SP, 02011-000"
+_CEP_RE = re.compile(r"\b(\d{5})-?(\d{3})\b")
+
+
+def _cep_do_endereco(texto: str) -> str | None:
+    match = _CEP_RE.search(texto)
+    if not match:
+        return None
+    return f"{match.group(1)}-{match.group(2)}"
 
 COR_ROTA = "#1f6feb"
 COR_BARREIRA = "#d1242f"
@@ -144,7 +154,7 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
     if not texto.strip():
         return None
 
-    _, cep = parse_endereco_maps(texto)
+    cep = _cep_do_endereco(texto)
     if not cep:
         st.warning(
             "Sem CEP no endereço colado. Copie a linha inteira do Google Maps — "
