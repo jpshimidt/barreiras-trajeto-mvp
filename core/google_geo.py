@@ -17,6 +17,10 @@ GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 CENTRO_SP = (-23.5505, -46.6333)  # lat, lon
 
 
+class PlacesApiNovaIndisponivel(Exception):
+    """Places API (New) desabilitada ou sem permissão — usar Geocoding legado."""
+
+
 def ler_google_api_key() -> str | None:
     """Chave para chamadas server-side (Places API, Geocoding). Nunca enviar ao navegador."""
     try:
@@ -156,6 +160,8 @@ def autocomplete_sugestoes(texto: str, api_key: str, *, limit: int = 5) -> list[
         resp = requests.post(AUTOCOMPLETE_URL, headers=_headers(api_key), json=corpo, timeout=TIMEOUT_S)
     except requests.RequestException as e:
         raise ErroExterno(f"Google Autocomplete falhou na rede: {e}") from e
+    if resp.status_code in (401, 403):
+        raise PlacesApiNovaIndisponivel(resp.text[:300])
     if resp.status_code != 200:
         raise ErroExterno(f"Google Autocomplete respondeu HTTP {resp.status_code} — {resp.text[:200]}")
     sugestoes = []
@@ -170,10 +176,42 @@ def autocomplete_sugestoes(texto: str, api_key: str, *, limit: int = 5) -> list[
     return sugestoes
 
 
-def geocodificar_google(texto: str, api_key: str, *, max_detalhes: int = 3) -> list[Local]:
-    """Busca candidatos via Autocomplete + Place Details (API New)."""
+def buscar_sugestoes_endereco(texto: str, api_key: str, *, limit: int = 5) -> list[dict]:
+    """
+    Sugestões para a UI — Places API (New) ou Geocoding legado como fallback.
+
+    Cada item: ``{"id": str, "texto": str, "local": Local | None}``.
+    Quando ``local`` já vem preenchido (fallback), não é preciso chamar Place Details.
+    """
     endereco = parse_endereco_maps(texto)
-    sugestoes = autocomplete_sugestoes(texto, api_key, limit=max_detalhes)
+    try:
+        novas = autocomplete_sugestoes(texto, api_key, limit=limit)
+        return [
+            {"id": s["place_id"], "texto": s["texto"], "local": None, "place_id": s["place_id"]}
+            for s in novas
+        ]
+    except PlacesApiNovaIndisponivel:
+        pass
+
+    locais = _geocode_legacy(texto, api_key, endereco)
+    return [
+        {
+            "id": f"legacy-{i}-{round(loc.lat, 6)}-{round(loc.lon, 6)}",
+            "texto": loc.endereco_formatado,
+            "local": loc,
+            "place_id": None,
+        }
+        for i, loc in enumerate(locais[:limit])
+    ]
+
+
+def geocodificar_google(texto: str, api_key: str, *, max_detalhes: int = 3) -> list[Local]:
+    """Busca candidatos via Autocomplete + Place Details (API New), com fallback legado."""
+    endereco = parse_endereco_maps(texto)
+    try:
+        sugestoes = autocomplete_sugestoes(texto, api_key, limit=max_detalhes)
+    except PlacesApiNovaIndisponivel:
+        return _geocode_legacy(texto, api_key, endereco)
     if not sugestoes:
         return _geocode_legacy(texto, api_key, endereco)
 
