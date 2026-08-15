@@ -57,10 +57,17 @@ A chave do widget JavaScript fica visível no navegador (DevTools). Por isso:
 - `cookie_key` precisa ter ≥ 32 caracteres aleatórios; valores de exemplo bloqueiam o app.
 - No Streamlit Cloud, senhas em texto puro nos Secrets são **recusadas**.
 
+## Limites de uso (cotas de API)
+
+- Máx. **30 cálculos** e **60 buscas de endereço** por sessão/hora
+- Tentativas de login falhas limitadas a **20/hora** por sessão
+- Geocodificação por texto só após clicar **Buscar endereço** (evita chamadas a cada tecla)
+
 ## Privacidade
 
-- Endereços residenciais ficam só na sessão do navegador (`st.session_state`).
-- Geocodificação e rotas **não** são cacheadas no servidor.
+- Endereços ficam em `st.session_state` no **servidor** até logout ou fim da sessão
+- Logout limpa chaves de endereço e resultado da memória da sessão
+- Geocodificação e rotas **não** são cacheadas entre sessões
 
 ## Reportar vulnerabilidades
 
