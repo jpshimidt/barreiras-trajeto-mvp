@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import copy
+import json
 import os
 from typing import Any
 
@@ -14,15 +14,30 @@ from core.seguranca import cookie_key_segura, senha_parece_hash
 from core.sessao_privada import limpar_dados_pessoais_sessao
 
 
+def _plain_dict(valor: Any) -> Any:
+    """Converte SecretDict / AttrDict em dict/list Python mutável."""
+    return json.loads(json.dumps(valor, default=str))
+
+
 def _config_auth() -> dict[str, Any] | None:
     try:
-        if "auth" in st.secrets:
-            # Cópia profunda: st.secrets é read-only no Streamlit Cloud e o
-            # streamlit-authenticator altera credenciais ao inicializar.
-            return copy.deepcopy(dict(st.secrets["auth"]))
+        if "auth" not in st.secrets:
+            return None
+        return _plain_dict(dict(st.secrets["auth"]))
     except Exception:
-        pass
-    return None
+        return None
+
+
+def _credenciais_mutaveis(config: dict[str, Any]) -> dict[str, Any]:
+    """Credenciais desacopladas de st.secrets para o streamlit-authenticator."""
+    credenciais = _plain_dict(config.get("credentials") or {})
+    usernames = credenciais.get("usernames") or {}
+    return {
+        "usernames": {
+            str(usuario): _plain_dict(dados)
+            for usuario, dados in dict(usernames).items()
+        }
+    }
 
 
 def _validar_credenciais(credenciais: dict[str, Any]) -> None:
@@ -69,18 +84,18 @@ def exigir_login() -> bool:
         st.stop()
         return False
 
-    credenciais = config.get("credentials")
-    if not credenciais:
-        st.error("Seção `[auth.credentials]` ausente nos Secrets.")
+    credenciais = _credenciais_mutaveis(config)
+    if not credenciais.get("usernames"):
+        st.error("Seção `[auth.credentials]` ausente ou vazia nos Secrets.")
         st.stop()
         return False
 
     _validar_credenciais(credenciais)
 
-    cookie = config.get("cookie") or {}
+    cookie = _plain_dict(config.get("cookie") or {})
     cookie_key = (
-        cookie.get("key")
-        or config.get("cookie_key")
+        str(cookie.get("key") or "")
+        or str(config.get("cookie_key") or "")
         or os.environ.get("AUTH_COOKIE_KEY", "")
     ).strip()
     if not cookie_key_segura(cookie_key):
@@ -93,9 +108,10 @@ def exigir_login() -> bool:
 
     authenticator = stauth.Authenticate(
         credenciais,
-        cookie.get("name") or config.get("cookie_name", "barreiras_auth"),
+        str(cookie.get("name") or config.get("cookie_name") or "barreiras_auth"),
         cookie_key,
-        float(cookie.get("expiry_days") or config.get("cookie_expiry_days", 30)),
+        float(cookie.get("expiry_days") or config.get("cookie_expiry_days") or 30),
+        auto_hash=False,
     )
 
     authenticator.login(location="main", key="login_form")
