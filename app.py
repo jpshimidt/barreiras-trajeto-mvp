@@ -25,7 +25,7 @@ from core.barreiras import (
 )
 from core.decisao import decidir
 from core.erros import ErroExterno
-from core.geocode import (
+from core.endereco_maps import (
     EXEMPLO_ENDERECO_MAPS,
     Local,
     geocodificar,
