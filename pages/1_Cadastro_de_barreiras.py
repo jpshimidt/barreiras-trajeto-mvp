@@ -2,35 +2,28 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
 import uuid
-from datetime import date
 from pathlib import Path
 
+import folium
 import streamlit as st
+from streamlit_folium import st_folium
 
 from core.auth_app import exigir_admin
-from core.barreiras import Barreira, TIPOS_BARREIRA
+from core.barreiras import TIPOS_BARREIRA, Barreira
 from core.barreiras_cache import invalidar_cache_barreiras, store_barreiras
-from core.barreiras_geojson import geometria_de_coords_json
+from core.barreiras_osm import buscar_barreiras_rua, nome_via_de_entrada
 from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
+from core.google_geo import buscar_sugestoes_endereco, ler_google_api_key
+from core.rate_limit import consumir_busca_barreira_osm
 
 ARQUIVO_BARREIRAS = Path(__file__).resolve().parent.parent / "dados" / "barreiras.geojson"
+COR_BARREIRA = "#d1242f"
 
 st.set_page_config(page_title="Cadastro de barreiras", page_icon="🛠️", layout="wide")
 
 exigir_admin()
-
-
-def _slug(texto: str) -> str:
-    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]+", "-", sem_acento.lower()).strip("-") or "barreira"
-
-
-def _novo_id(nome: str) -> str:
-    return f"{_slug(nome)}-{date.today().isoformat()}-{uuid.uuid4().hex[:6]}"
 
 
 @st.cache_resource(show_spinner=False)
@@ -38,94 +31,179 @@ def _store():
     return store_barreiras(ARQUIVO_BARREIRAS)
 
 
-def _formulario_barreira(barreira: Barreira | None, *, chave: str) -> Barreira | None:
-    with st.form(f"form_{chave}", clear_on_submit=False):
-        nome = st.text_input(
-            "Nome da via",
-            value=barreira.nome if barreira else "",
-            key=f"{chave}_nome",
-        )
-        tipo = st.selectbox(
-            "Tipo",
-            TIPOS_BARREIRA,
-            index=TIPOS_BARREIRA.index(barreira.tipo) if barreira and barreira.tipo in TIPOS_BARREIRA else 0,
-            key=f"{chave}_tipo",
-        )
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            numero_inicio = st.number_input(
-                "Nº início (opcional)",
-                min_value=0,
-                value=(barreira.numero_inicio or 0) if barreira else 0,
-                step=1,
-                key=f"{chave}_num_inicio",
+def _mapa_preview(barreiras: list[Barreira]) -> folium.Map:
+    mapa = folium.Map(tiles="cartodbpositron", control_scale=True)
+    for barreira in barreiras:
+        folium.GeoJson(
+            barreira.geometria.__geo_interface__,
+            style_function=lambda _: {"color": COR_BARREIRA, "weight": 5, "opacity": 0.9},
+            tooltip=barreira.rotulo,
+        ).add_to(mapa)
+    if barreiras:
+        minx, miny, maxx, maxy = barreiras[0].geometria.bounds
+        for barreira in barreiras[1:]:
+            bx0, by0, bx1, by1 = barreira.geometria.bounds
+            minx, miny, maxx, maxy = min(minx, bx0), min(miny, by0), max(maxx, bx1), max(maxy, by1)
+        mapa.fit_bounds([(miny, minx), (maxy, maxx)], padding=(30, 30))
+    return mapa
+
+
+def _limpar_preview() -> None:
+    for chave in ("preview_barreiras", "preview_entrada", "preview_rotulo"):
+        st.session_state.pop(chave, None)
+
+
+def _secao_nova_barreira() -> None:
+    st.subheader("Nova barreira")
+    st.caption(
+        "Informe o **nome ou endereço da rua**. O sistema busca o traçado no mapa. "
+        "Deixe os números em branco (ou 0) para cadastrar a **rua inteira**."
+    )
+
+    entrada = st.text_input(
+        "Endereço ou nome da rua",
+        key="nova_entrada",
+        placeholder="Ex.: R. Cruz de Malta — ou cole como no Google Maps",
+        help="Pode ser só o nome da via ou um endereço completo em São Paulo.",
+    )
+
+    api_key = ler_google_api_key()
+    if api_key and entrada.strip():
+        if st.button("Buscar sugestões de endereço", key="nova_google", type="secondary"):
+            try:
+                st.session_state["nova_sugestoes"] = buscar_sugestoes_endereco(entrada.strip(), api_key)
+            except ErroExterno as e:
+                st.error(str(e))
+        sugestoes = st.session_state.get("nova_sugestoes") or []
+        if sugestoes:
+            escolha = st.radio(
+                "Sugestões (opcional)",
+                [s["texto"] for s in sugestoes],
+                key="nova_sugestao_escolhida",
+                index=None,
             )
-        with col2:
-            numero_fim = st.number_input(
-                "Nº fim (opcional)",
-                min_value=0,
-                value=(barreira.numero_fim or 0) if barreira else 0,
-                step=1,
-                key=f"{chave}_num_fim",
-            )
-        with col3:
-            paridade = st.selectbox(
-                "Paridade",
-                ["", "ambos", "par", "impar"],
-                index=(
-                    ["", "ambos", "par", "impar"].index(barreira.paridade or "")
-                    if barreira and barreira.paridade in {"", "ambos", "par", "impar"}
-                    else 0
-                ),
-                key=f"{chave}_paridade",
-            )
+            if escolha:
+                st.session_state["nova_entrada"] = escolha
+                st.session_state.pop("nova_sugestoes", None)
+                st.rerun()
 
-        coords_padrao = ""
-        if barreira:
-            coords = list(barreira.geometria.coords)
-            coords_padrao = str([[lon, lat] for lon, lat in coords])
-
-        geometria_txt = st.text_area(
-            "Geometria (LineString)",
-            value=coords_padrao,
-            height=120,
-            help="Coordenadas `[[lon, lat], ...]` em EPSG:4326. Desenhe no geojson.io e cole aqui.",
-            placeholder="[[-46.63, -23.51], [-46.62, -23.51]]",
-            key=f"{chave}_geometria",
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        numero_inicio = st.number_input(
+            "Nº início (opcional)",
+            min_value=0,
+            value=0,
+            step=1,
+            key="nova_num_inicio",
+            help="0 = não limitar por número.",
+        )
+    with col2:
+        numero_fim = st.number_input(
+            "Nº fim (opcional)",
+            min_value=0,
+            value=0,
+            step=1,
+            key="nova_num_fim",
+        )
+    with col3:
+        paridade = st.selectbox(
+            "Paridade",
+            ["", "ambos", "par", "impar"],
+            key="nova_paridade",
         )
 
-        enviado = st.form_submit_button("Salvar", type="primary")
-        if not enviado:
-            return None
-        if not nome.strip():
-            st.error("Informe o nome da via.")
-            return None
-        if not geometria_txt.strip():
-            st.error("Informe a geometria da barreira.")
-            return None
-        try:
-            geometria = geometria_de_coords_json(geometria_txt.strip())
-        except (ErroExterno, ValueError, TypeError) as e:
-            st.error(str(e))
-            return None
+    tipos_opcao = ["(detectar automaticamente)", *TIPOS_BARREIRA]
+    tipo = st.selectbox("Tipo da via", tipos_opcao, key="nova_tipo")
 
-        return Barreira(
-            id=barreira.id if barreira else _novo_id(nome),
-            nome=nome.strip(),
-            tipo=tipo,
-            geometria=geometria,
-            numero_inicio=int(numero_inicio) if numero_inicio > 0 else None,
-            numero_fim=int(numero_fim) if numero_fim > 0 else None,
-            paridade=paridade or None,
+    if st.button("Buscar rua no mapa", type="primary", key="nova_buscar_osm"):
+        if not entrada.strip():
+            st.error("Informe o endereço ou nome da rua.")
+        else:
+            try:
+                consumir_busca_barreira_osm()
+            except ErroExterno as e:
+                st.error(str(e))
+            else:
+                try:
+                    with st.spinner("Consultando OpenStreetMap…"):
+                        preview = buscar_barreiras_rua(
+                            entrada,
+                            numero_inicio=int(numero_inicio) or None,
+                            numero_fim=int(numero_fim) or None,
+                            paridade=paridade or None,
+                            tipo=tipo,
+                        )
+                except ErroExterno as e:
+                    st.error(str(e))
+                else:
+                    st.session_state["preview_barreiras"] = preview
+                    st.session_state["preview_entrada"] = entrada.strip()
+                    nome = nome_via_de_entrada(entrada)
+                    if preview:
+                        st.session_state["preview_rotulo"] = preview[0].rotulo
+                    else:
+                        st.session_state["preview_rotulo"] = nome
+
+    preview: list[Barreira] | None = st.session_state.get("preview_barreiras")
+    if preview:
+        st.success(
+            f"**{len(preview)} trecho(s)** encontrado(s) para "
+            f"**{st.session_state.get('preview_rotulo', '')}**. Confira no mapa."
         )
+        st_folium(_mapa_preview(preview), width=None, height=400, key="preview_mapa")
+        with st.expander("Detalhes dos trechos"):
+            for barreira in preview[:40]:
+                st.caption(f"· {barreira.rotulo} — tipo: {barreira.tipo}")
+            if len(preview) > 40:
+                st.caption(f"… e mais {len(preview) - 40} trechos.")
+
+        col_salvar, col_limpar = st.columns(2)
+        with col_salvar:
+            if st.button("Cadastrar barreira(s)", type="primary", key="nova_confirmar"):
+                store = _store()
+                criadas = 0
+                erros: list[str] = []
+                for barreira in preview:
+                    try:
+                        store.criar(barreira, mensagem=f"Cadastro: criar {barreira.rotulo}")
+                        criadas += 1
+                    except ErroExterno as e:
+                        if "Já existe" in str(e):
+                            nova = Barreira(
+                                id=f"{barreira.id}-{uuid.uuid4().hex[:6]}",
+                                nome=barreira.nome,
+                                tipo=barreira.tipo,
+                                geometria=barreira.geometria,
+                                numero_inicio=barreira.numero_inicio,
+                                numero_fim=barreira.numero_fim,
+                                paridade=barreira.paridade,
+                            )
+                            try:
+                                store.criar(nova, mensagem=f"Cadastro: criar {nova.rotulo}")
+                                criadas += 1
+                            except ErroExterno as e2:
+                                erros.append(str(e2))
+                        else:
+                            erros.append(str(e))
+                if criadas:
+                    invalidar_cache_barreiras()
+                    _limpar_preview()
+                    st.success(f"{criadas} trecho(s) cadastrado(s).")
+                    st.rerun()
+                if erros:
+                    st.error("\n".join(erros[:5]))
+        with col_limpar:
+            if st.button("Descartar prévia", key="nova_descartar"):
+                _limpar_preview()
+                st.rerun()
 
 
 store = _store()
 
 st.title("🛠️ Cadastro de barreiras")
 st.caption(
-    "Crie, edite e remova trechos de barreira. "
-    "As alterações persistem entre deploys quando o GitHub está configurado."
+    "Cadastre ruas que funcionam como barreira física. "
+    "Basta informar o endereço — a geometria vem do mapa."
 )
 st.info(f"Armazenamento: **{descricao_store(store)}**")
 
@@ -139,6 +217,12 @@ st.subheader(f"{len(barreiras)} trechos cadastrados")
 for barreira in sorted(barreiras, key=lambda b: b.rotulo):
     with st.expander(barreira.rotulo):
         st.caption(f"ID: `{barreira.id}` · tipo: {barreira.tipo}")
+        if barreira.numero_inicio or barreira.numero_fim:
+            st.caption(
+                f"Faixa: nº {barreira.numero_inicio or '…'} – {barreira.numero_fim or '…'}"
+                f"{f' ({barreira.paridade})' if barreira.paridade else ''}"
+            )
+        st_folium(_mapa_preview([barreira]), width=None, height=260, key=f"mapa_{barreira.id}")
         if st.button("Remover", key=f"del_{barreira.id}", type="secondary"):
             try:
                 store.remover(barreira.id, mensagem=f"Cadastro: remover {barreira.rotulo}")
@@ -147,24 +231,6 @@ for barreira in sorted(barreiras, key=lambda b: b.rotulo):
                 st.rerun()
             except ErroExterno as e:
                 st.error(str(e))
-        editada = _formulario_barreira(barreira, chave=f"edit_{barreira.id}")
-        if editada:
-            try:
-                store.atualizar(editada, mensagem=f"Cadastro: atualizar {editada.rotulo}")
-                invalidar_cache_barreiras()
-                st.success("Barreira atualizada.")
-                st.rerun()
-            except ErroExterno as e:
-                st.error(str(e))
 
 st.divider()
-st.subheader("Nova barreira")
-nova = _formulario_barreira(None, chave="nova")
-if nova:
-    try:
-        store.criar(nova, mensagem=f"Cadastro: criar {nova.rotulo}")
-        invalidar_cache_barreiras()
-        st.success("Barreira criada.")
-        st.rerun()
-    except ErroExterno as e:
-        st.error(str(e))
+_secao_nova_barreira()

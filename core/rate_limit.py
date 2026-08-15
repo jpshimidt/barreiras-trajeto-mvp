@@ -10,6 +10,7 @@ from core.erros import ErroExterno
 MAX_CALCULOS_POR_HORA = 30
 MAX_GEOCODIFICACOES_POR_HORA = 60
 MAX_TENTATIVAS_LOGIN_POR_HORA = 20
+MAX_BUSCAS_BARREIRA_OSM_POR_HORA = 15
 JANELA_S = 3600
 
 
@@ -51,3 +52,8 @@ def consumir_geocodificacao() -> None:
 def registrar_tentativa_login_falha() -> None:
     verificar_limite("login_fail", MAX_TENTATIVAS_LOGIN_POR_HORA, rotulo="tentativas de login")
     _registrar("login_fail")
+
+
+def consumir_busca_barreira_osm() -> None:
+    verificar_limite("osm_barreira", MAX_BUSCAS_BARREIRA_OSM_POR_HORA, rotulo="buscas de rua no mapa")
+    _registrar("osm_barreira")
