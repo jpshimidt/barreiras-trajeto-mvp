@@ -429,18 +429,21 @@ def geocodificar(texto: str, api_key: str | None = None, cep: str | None = None)
     if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:
         return locais
 
-    from core.photon_geo import buscar_photon, consulta_photon, local_de_photon
+    from core.photon_geo import buscar_photon, consultas_photon, local_de_photon
 
-    q_photon = consulta_photon(endereco) or consulta
-    for feature in buscar_photon(q_photon):
-        local = local_de_photon(feature, q_photon, endereco)
-        if local is None:
-            continue
-        chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        locais.append(local)
+    for q_photon in consultas_photon(endereco) or [consulta]:
+        for feature in buscar_photon(q_photon):
+            local = local_de_photon(feature, q_photon, endereco)
+            if local is None:
+                continue
+            chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            locais.append(local)
+        locais = _ordenar_candidatos(locais)
+        if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:
+            return locais
 
     locais = _ordenar_candidatos(locais)
     if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:

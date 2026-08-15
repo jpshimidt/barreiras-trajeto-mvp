@@ -14,6 +14,7 @@ from core.endereco_maps import (
 from core.ors import TIMEOUT_S
 
 PHOTON_URL = "https://photon.komoot.io/api/"
+USER_AGENT = "barreiras-trajeto-mvp/1.0 (elegibilidade transporte escolar SP)"
 
 
 def local_de_photon(feature: dict, consulta: str, endereco: EnderecoMaps) -> Local | None:
@@ -68,7 +69,12 @@ def local_de_photon(feature: dict, consulta: str, endereco: EnderecoMaps) -> Loc
 def buscar_photon(consulta: str, *, limit: int = 8) -> list[dict]:
     params = {"q": consulta, "limit": limit, "lang": "default"}
     try:
-        resp = requests.get(PHOTON_URL, params=params, timeout=TIMEOUT_S)
+        resp = requests.get(
+            PHOTON_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=TIMEOUT_S,
+        )
     except requests.RequestException:
         return []
     if resp.status_code != 200:
@@ -77,7 +83,41 @@ def buscar_photon(consulta: str, *, limit: int = 8) -> list[dict]:
     return dados.get("features") or []
 
 
-def consulta_photon(endereco: EnderecoMaps) -> str | None:
+def consultas_photon(endereco: EnderecoMaps) -> list[str]:
+    """Variações de consulta para o Photon — expande abreviações como R."""
     from core.nominatim_geo import consulta_nominatim_principal
 
-    return consulta_nominatim_principal(endereco)
+    consultas: list[str] = []
+    principal = consulta_nominatim_principal(endereco)
+    if principal:
+        consultas.append(principal)
+    if endereco.logradouro and endereco.numero and endereco.bairro:
+        logradouro = endereco.logradouro
+        if logradouro.lower().startswith("r."):
+            logradouro = "Rua" + logradouro[2:]
+        consultas.append(
+            ", ".join(
+                [
+                    f"{endereco.numero} {logradouro}",
+                    endereco.bairro,
+                    MUNICIPIO,
+                    "SP",
+                    endereco.cep or "",
+                ]
+            ).strip(", ")
+        )
+    if endereco.texto:
+        consultas.append(endereco.texto.strip())
+    vistos: set[str] = set()
+    unicas: list[str] = []
+    for consulta in consultas:
+        chave = consulta.strip().lower()
+        if chave and chave not in vistos:
+            vistos.add(chave)
+            unicas.append(consulta.strip())
+    return unicas
+
+
+def consulta_photon(endereco: EnderecoMaps) -> str | None:
+    consultas = consultas_photon(endereco)
+    return consultas[0] if consultas else None
