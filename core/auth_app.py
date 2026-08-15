@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 from typing import Any
 
@@ -16,7 +17,9 @@ from core.sessao_privada import limpar_dados_pessoais_sessao
 def _config_auth() -> dict[str, Any] | None:
     try:
         if "auth" in st.secrets:
-            return dict(st.secrets["auth"])
+            # Cópia profunda: st.secrets é read-only no Streamlit Cloud e o
+            # streamlit-authenticator altera credenciais ao inicializar.
+            return copy.deepcopy(dict(st.secrets["auth"]))
     except Exception:
         pass
     return None
