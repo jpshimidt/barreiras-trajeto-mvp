@@ -77,11 +77,17 @@ def local_de_place_details(dados: dict, consulta: str, endereco: EnderecoMaps | 
 def local_de_selecao_widget(dados: dict, consulta: str = "") -> Local:
     """Converte o retorno do widget Autocomplete (Maps JavaScript API) em Local."""
     endereco = parse_endereco_maps(consulta or dados.get("formatted_address", ""))
-    numero = dados.get("number") or endereco.numero
-    numero_informado = endereco.numero or numero
-    numero_confirmado = bool(numero and numero_informado and numero == numero_informado)
-    if numero_informado and not numero:
+    numero_google = (dados.get("number") or "").strip() or None
+    numero_informado = endereco.numero or numero_google
+
+    if endereco.numero and numero_google:
+        numero_confirmado = endereco.numero == numero_google
+    elif endereco.numero and not numero_google:
         numero_confirmado = False
+    elif numero_google:
+        numero_confirmado = True
+    else:
+        numero_confirmado = True
 
     return Local(
         texto_original=consulta or dados.get("formatted_address", ""),
@@ -139,15 +145,15 @@ def autocomplete_sugestoes(texto: str, api_key: str, *, limit: int = 5) -> list[
     return sugestoes
 
 
-def geocodificar_google(texto: str, api_key: str) -> list[Local]:
+def geocodificar_google(texto: str, api_key: str, *, max_detalhes: int = 3) -> list[Local]:
     """Busca candidatos via Autocomplete + Place Details (API New)."""
     endereco = parse_endereco_maps(texto)
-    sugestoes = autocomplete_sugestoes(texto, api_key)
+    sugestoes = autocomplete_sugestoes(texto, api_key, limit=max_detalhes)
     if not sugestoes:
         return _geocode_legacy(texto, api_key, endereco)
 
     locais: list[Local] = []
-    for sug in sugestoes:
+    for sug in sugestoes[:max_detalhes]:
         local = detalhes_place_id(sug["place_id"], api_key, texto, endereco)
         locais.append(local)
     return locais

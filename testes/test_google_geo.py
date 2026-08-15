@@ -33,3 +33,19 @@ def test_local_de_widget_confirma_numero():
     assert local.numero_informado == "353"
     assert local.numero_confirmado is True
     assert local.adequacao == 100
+
+
+def test_local_de_widget_sem_numero_google_nao_confirma():
+    local = local_de_selecao_widget(
+        {
+            "formatted_address": "R. Borges - Parada Inglesa, São Paulo - SP",
+            "lat": -23.484,
+            "lon": -46.600,
+            "street": "R. Borges",
+            "number": "",
+        },
+        "R. Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000",
+    )
+    assert local.numero_informado == "353"
+    assert local.numero_confirmado is False
+    assert local.adequacao == 75

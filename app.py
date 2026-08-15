@@ -187,6 +187,20 @@ def _limpar_resultado_se_entrada_mudou(
         del st.session_state["resultado_salvo"]
 
 
+def _status_integracoes() -> None:
+    """Indicadores discretos de quais APIs estão configuradas."""
+    google_ok = bool(ler_google_api_key() and google_places_input is not None)
+    ors_ok = bool(_ler_api_key_ors())
+    st.caption(
+        f"{'✅' if google_ok else '⚠️'} Google Places · "
+        f"{'✅' if ors_ok else '⚠️'} OpenRouteService (rotas)"
+    )
+    if not google_ok:
+        st.caption("Sem chave Google: endereços via colar texto + Nominatim/Photon.")
+    if not ors_ok:
+        st.caption("Sem chave ORS: cálculo de rota não funciona.")
+
+
 def campo_endereco_google(rotulo: str, chave: str, exemplo: str, api_key: str) -> Local | None:
     """Busca endereço com autocomplete do Google (sem sair do app)."""
     st.markdown(f"**{rotulo}**")
@@ -242,7 +256,15 @@ def campo_endereco_google(rotulo: str, chave: str, exemplo: str, api_key: str) -
         st.info("Digite o endereço e escolha uma sugestão do Google, ou use um link do Maps.")
         return None
 
-    st.success(f"Encontrado: **{local_salvo.endereco_formatado}**")
+    col_info, col_limpar = st.columns([5, 1])
+    with col_info:
+        st.success(f"Encontrado: **{local_salvo.endereco_formatado}**")
+    with col_limpar:
+        if st.button("Limpar", key=f"{chave}_limpar", help="Apagar este endereço"):
+            for suffix in ("_local", "_sel", "_link"):
+                st.session_state.pop(f"{chave}{suffix}", None)
+            st.rerun()
+
     _aviso_numero_nao_confirmado(local_salvo)
     st.caption(f"Coordenada: {local_salvo.lat:.6f}, {local_salvo.lon:.6f}")
     return local_salvo
@@ -376,6 +398,8 @@ def pagina_principal() -> None:
             help="Não mexa sem ter os casos conhecidos rodando. Buffer generoso demais "
             "faz a rota encostar em via que ela não usa.",
         )
+        st.divider()
+        _status_integracoes()
         st.divider()
         st.caption(
             "Protótipo de validação da regra. Nenhuma consulta é gravada: sem log, "

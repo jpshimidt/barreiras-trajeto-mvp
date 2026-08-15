@@ -36,6 +36,10 @@
         }
         autocomplete = new google.maps.places.Autocomplete(input, {
           componentRestrictions: { country: "br" },
+          bounds: new google.maps.LatLngBounds(
+            { lat: -23.82, lng: -46.95 },
+            { lat: -23.35, lng: -46.35 }
+          ),
           fields: ["formatted_address", "geometry", "address_components", "name"],
           types: ["address"],
         });
