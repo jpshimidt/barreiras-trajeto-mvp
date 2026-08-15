@@ -306,6 +306,16 @@ def test_parse_endereco_maps_normaliza_espacos():
     assert endereco.cep == "02247-000"
 
 
+def test_parse_endereco_maps_aceita_sem_sp_e_cep_sem_hifen():
+    """Colagem comum do Google Maps no celular: sem ' - SP' e CEP contínuo."""
+    endereco = parse_endereco_maps("Rua Borges, 353 - Parada Inglesa, São paulo, 02247000")
+    assert endereco.logradouro == "Rua Borges"
+    assert endereco.numero == "353"
+    assert endereco.bairro == "Parada Inglesa"
+    assert endereco.uf == "SP"
+    assert endereco.cep == "02247-000"
+
+
 def test_pontuacao_prefere_rua_exata_e_penaliza_homonimo():
     endereco = EnderecoMaps(
         texto="Rua Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000",
@@ -412,6 +422,46 @@ def test_candidato_de_sao_paulo_passa():
 def test_candidato_generico_de_cidade_e_descartado():
     """'São Paulo, Brazil' sem rua não serve para decidir elegibilidade."""
     assert local_de_feature(feature_pelias("São Paulo, Brazil", "São Paulo", 0.9, layer="locality"), "x") is None
+
+
+def test_candidato_nome_curto_sem_rua_e_descartado():
+    """Pelias devolvia 'Se, São Paulo, Brazil' para R. da Grota — isso não é endereço."""
+    assert local_de_feature(feature_pelias("Se, São Paulo, Brazil", "São Paulo", 0.6, layer="neighbourhood", street=None), "x") is None
+
+
+def test_local_de_nominatim_converte_resposta_osm():
+    from core.nominatim_geo import local_de_nominatim
+
+    endereco = EnderecoMaps(
+        texto="R. da Grota, 483 - Vila Gustavo, São Paulo - SP, 02206-010",
+        logradouro="R. da Grota",
+        numero="483",
+        bairro="Vila Gustavo",
+        cidade="São Paulo",
+        uf="SP",
+        cep="02206-010",
+    )
+    resultado = {
+        "display_name": "483, Rua da Grota, Vila Gustavo, Tucuruvi, São Paulo, Brasil",
+        "lat": str(LAT),
+        "lon": str(LON),
+        "importance": 0.6,
+        "type": "house",
+        "class": "building",
+        "address": {
+            "house_number": "483",
+            "road": "Rua da Grota",
+            "suburb": "Vila Gustavo",
+            "city": "São Paulo",
+            "postcode": "02206-010",
+        },
+    }
+    local = local_de_nominatim(resultado, endereco.texto, endereco)
+
+    assert local is not None
+    assert local.endereco_formatado.startswith("483, Rua da Grota")
+    assert (local.lon, local.lat) == (LON, LAT)
+    assert (local.adequacao or 0) >= 60
 
 
 def test_candidato_sem_municipio_passa():
