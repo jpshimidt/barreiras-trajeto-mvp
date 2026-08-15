@@ -28,6 +28,13 @@ MAPS_RE = re.compile(
     r"(?P<cidade>.+?)\s*-\s*(?P<uf>[A-Z]{2})(?:,\s*(?P<cep>\d{5}-?\d{3}))?\s*$",
     re.IGNORECASE,
 )
+# Sem " - SP": Rua Borges, 353 - Parada Inglesa, São paulo, 02247000
+MAPS_RE_FLEX = re.compile(
+    r"^(?P<logradouro>.+?),\s*(?P<numero>\d+)\s*-\s*(?P<bairro>.+?),\s*"
+    r"(?P<cidade>(?:São|Sao)\s*Paulo)(?:\s*-\s*SP)?"
+    r"(?:,\s*(?P<cep>\d{5}-?\d{3}))?\s*$",
+    re.IGNORECASE,
+)
 MIN_ADEQUACAO_AUTO = 60
 MARGEM_ADEQUACAO = 15
 MIN_ADEQUACAO_ESCOLHA = 25
@@ -89,26 +96,38 @@ def _normalizar_rua(nome: str) -> str:
     return re.sub(r"\s+", " ", nome)
 
 
+def _normalizar_cep(cep: str | None) -> str | None:
+    if not cep:
+        return None
+    digitos = re.sub(r"\D", "", cep)
+    if len(digitos) != 8:
+        return cep
+    return f"{digitos[:5]}-{digitos[5:]}"
+
+
 def parse_endereco_maps(texto: str) -> EnderecoMaps:
     """
     Interpreta endereço colado no padrão Google Maps.
 
     Ex.: R. Ana Soares Barcelos, 355 - Vila Venditti, São Paulo - SP, 07031-070
+    Aceita variações sem " - SP" ou com CEP sem hífen.
     """
     texto = " ".join(texto.strip().split())
-    match = MAPS_RE.match(texto)
-    if match:
-        grupos = match.groupdict()
-        cep = grupos.get("cep")
-        return EnderecoMaps(
-            texto=texto,
-            logradouro=grupos["logradouro"].strip(),
-            numero=grupos["numero"].strip(),
-            bairro=grupos["bairro"].strip(),
-            cidade=grupos["cidade"].strip(),
-            uf=grupos["uf"].strip().upper(),
-            cep=f"{cep[:5]}-{cep[5:]}" if cep and "-" not in cep else cep,
-        )
+    for pattern in (MAPS_RE, MAPS_RE_FLEX):
+        match = pattern.match(texto)
+        if match:
+            grupos = match.groupdict()
+            cep = _normalizar_cep(grupos.get("cep"))
+            uf = grupos.get("uf")
+            return EnderecoMaps(
+                texto=texto,
+                logradouro=grupos["logradouro"].strip(),
+                numero=grupos["numero"].strip(),
+                bairro=grupos["bairro"].strip(),
+                cidade=grupos["cidade"].strip(),
+                uf=(uf or "SP").strip().upper(),
+                cep=cep,
+            )
     return EnderecoMaps(
         texto=texto,
         logradouro=None,
@@ -147,17 +166,25 @@ def _consulta_alternativa(endereco: EnderecoMaps) -> str | None:
 def _candidato_tem_endereco(props: dict) -> bool:
     """Descarta resultados genéricos como 'São Paulo, Brazil' sem rua ou número."""
     layer = (props.get("layer") or "").lower()
-    if layer in {"locality", "region", "country", "macroregion", "county"}:
-        return False
+    if layer in {"locality", "region", "country", "macroregion", "county", "neighbourhood", "suburb"}:
+        street = props.get("street")
+        housenumber = props.get("housenumber")
+        if not street and not housenumber:
+            return False
 
     street = props.get("street")
     housenumber = props.get("housenumber")
     name = (props.get("name") or "").strip()
     label = (props.get("label") or "").strip().lower()
 
+    if name and len(name) <= 3 and not street and not housenumber:
+        return False
+    primeiro_rotulo = label.split(",")[0].strip()
+    if primeiro_rotulo and len(primeiro_rotulo) <= 3 and not street and not housenumber:
+        return False
     if housenumber or street:
         return True
-    if layer in {"address", "venue"} and name:
+    if layer in {"address", "venue", "house", "school", "building", "residential"} and name:
         return True
     if layer == "street" and name:
         return True
@@ -322,7 +349,7 @@ def resolver_geocodificacao(texto: str, candidatos: list[Local]) -> ResolucaoGeo
     return ResolucaoGeocode(None, tuple(empatados or ordenados), endereco, automatico=False)
 
 
-def _buscar_pelias(consulta: str, api_key: str, cep: str | None = None) -> list[dict]:
+def _buscar_ors(consulta: str, api_key: str, cep: str | None = None) -> list[dict]:
     params = {
         "api_key": api_key,
         "text": consulta,
@@ -343,27 +370,66 @@ def _buscar_pelias(consulta: str, api_key: str, cep: str | None = None) -> list[
     return resp.json().get("features") or []
 
 
+def _locais_de_resultados(
+    resultados: list[dict],
+    consulta: str,
+    endereco: EnderecoMaps,
+    *,
+    origem: str,
+) -> list[Local]:
+    from core.nominatim_geo import local_de_nominatim
+
+    locais: list[Local] = []
+    for item in resultados:
+        if origem == "nominatim":
+            local = local_de_nominatim(item, consulta, endereco)
+        else:
+            local = local_de_feature(item, consulta, endereco)
+        if local is not None:
+            locais.append(local)
+    return locais
+
+
 def geocodificar(texto: str, api_key: str, cep: str | None = None) -> list[Local]:
-    """Candidatos ordenados por adequação ao endereço colado, depois confiança do ORS."""
+    """
+    Candidatos ordenados por adequação ao endereço colado.
+
+    Usa Nominatim (OpenStreetMap) como fonte principal — funciona melhor para
+  endereços brasileiros colados do Google Maps. ORS/Pelias entra só como
+    reforço quando o Nominatim não devolve nada útil.
+    """
+    from core.nominatim_geo import buscar_nominatim, consultas_nominatim
+
     endereco = parse_endereco_maps(texto)
     consulta = montar_consulta(texto, cep)
-    features = _buscar_pelias(consulta, api_key, endereco.cep)
-
-    alternativa = _consulta_alternativa(endereco)
-    if alternativa and alternativa != consulta:
-        features.extend(_buscar_pelias(alternativa, api_key, endereco.cep))
-
     vistos: set[tuple[float, float, str]] = set()
     locais: list[Local] = []
+
+    for q in consultas_nominatim(endereco) or [consulta]:
+        for item in buscar_nominatim(q):
+            for local in _locais_de_resultados([item], q, endereco, origem="nominatim"):
+                chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                locais.append(local)
+
+    locais = _ordenar_candidatos(locais)
+    if locais and (locais[0].adequacao or 0) >= MIN_ADEQUACAO_ESCOLHA:
+        return locais
+
+    features = _buscar_ors(consulta, api_key, endereco.cep)
+    alternativa = _consulta_alternativa(endereco)
+    if alternativa and alternativa != consulta:
+        features.extend(_buscar_ors(alternativa, api_key, endereco.cep))
+
     for feature in features:
-        local = local_de_feature(feature, consulta, endereco)
-        if local is None:
-            continue
-        chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
-        if chave in vistos:
-            continue
-        vistos.add(chave)
-        locais.append(local)
+        for local in _locais_de_resultados([feature], consulta, endereco, origem="ors"):
+            chave = (round(local.lat, 6), round(local.lon, 6), local.endereco_formatado)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            locais.append(local)
 
     locais = _ordenar_candidatos(locais)
     if not locais:
