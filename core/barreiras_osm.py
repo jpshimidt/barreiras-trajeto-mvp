@@ -816,6 +816,85 @@ def buscar_barreira_entre_links(
     )
 
 
+def barreira_em_sao_paulo(barreira: Barreira) -> bool:
+    from core.geo_limites import coordenada_em_sao_paulo
+
+    lon, lat = barreira.geometria.centroid.coords[0]
+    return coordenada_em_sao_paulo(lat, lon)
+
+
+def filtrar_barreiras_em_sao_paulo(barreiras: list[Barreira]) -> list[Barreira]:
+    return [b for b in barreiras if barreira_em_sao_paulo(b)]
+
+
+def filtrar_barreiras_perto(
+    barreiras: list[Barreira],
+    lat: float,
+    lon: float,
+    *,
+    raio_m: float = 2500,
+) -> list[Barreira]:
+    """Mantém só trechos cujo centro está a até ``raio_m`` do pino de referência."""
+    from shapely.geometry import Point
+
+    from core.geo import crs_utm_local, para_metrico
+
+    crs = crs_utm_local(lon, lat)
+    centro = para_metrico(Point(lon, lat), crs)
+    perto: list[Barreira] = []
+    for barreira in barreiras:
+        dist = para_metrico(barreira.geometria.centroid, crs).distance(centro)
+        if dist <= raio_m:
+            perto.append(barreira)
+    return perto
+
+
+def refinar_preview(
+    barreiras: list[Barreira],
+    entrada: str | None = None,
+    *,
+    ancora: tuple[float, float] | None = None,
+) -> tuple[list[Barreira], int]:
+    """
+    Descarta trechos fora da capital e, se houver pino de referência,
+    os que estão longe (homônimas em outras cidades).
+    """
+    na_capital = filtrar_barreiras_em_sao_paulo(barreiras)
+    if ancora is None and entrada:
+        ancora = ancora_da_entrada(entrada)
+    if ancora and len(na_capital) > 1:
+        lat, lon = ancora
+        perto = filtrar_barreiras_perto(na_capital, lat, lon)
+        if perto:
+            na_capital = perto
+    removidos = len(barreiras) - len(na_capital)
+    return na_capital, removidos
+
+
+def ancora_da_entrada(entrada: str) -> tuple[float, float] | None:
+    """Pino de referência (lat, lon) a partir de link ou endereço — para filtrar homônimas."""
+    from core.google_geo import (
+        geocode_ponto,
+        ler_google_api_key,
+        parece_link_maps,
+        pin_de_link_maps,
+    )
+
+    texto = (entrada or "").strip()
+    if not texto:
+        return None
+    if parece_link_maps(texto):
+        try:
+            return pin_de_link_maps(texto)
+        except ErroExterno:
+            return None
+    api_key = ler_google_api_key()
+    if not api_key:
+        return None
+    consulta = texto if "são paulo" in texto.lower() or "sao paulo" in texto.lower() else f"{texto}, São Paulo, SP"
+    return geocode_ponto(consulta, api_key)
+
+
 def comprimento_m(barreira: Barreira) -> float:
     """Comprimento da geometria em metros (UTM local)."""
     from core.geo import crs_utm_local, para_metrico
@@ -980,4 +1059,10 @@ def buscar_barreiras_rua(
             barreira.numero_fim = trecho.numero_fim
         if trecho.paridade:
             barreira.paridade = trecho.paridade
+    barreiras, _ = refinar_preview(barreiras, entrada)
+    if not barreiras:
+        raise ErroExterno(
+            f"Os trechos de {nome!r} ficaram fora de São Paulo capital. "
+            "Use os dois links (início e fim) da rua na capital."
+        )
     return barreiras
