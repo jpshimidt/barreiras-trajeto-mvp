@@ -778,9 +778,6 @@ def colar_clique_na_via(
 
     Se a API falhar ou o asfalto estiver longe demais, devolve o clique original.
     """
-    from shapely.geometry import Point
-
-    from core.geo import crs_utm_local, para_metrico
     from core.google_geo import ler_google_api_key
 
     api_key = api_key or ler_google_api_key()
@@ -803,11 +800,7 @@ def colar_clique_na_via(
     if loc.get("latitude") is None or loc.get("longitude") is None:
         return (lat, lon)
     snap = (float(loc["latitude"]), float(loc["longitude"]))
-    crs = crs_utm_local(lon, lat)
-    dist = para_metrico(Point(lon, lat), crs).distance(
-        para_metrico(Point(snap[1], snap[0]), crs)
-    )
-    if dist > raio_m:
+    if distancia_m_latlon((lat, lon), snap) > raio_m:
         return (lat, lon)
     return snap
 
@@ -945,6 +938,34 @@ def clique_distinto(
     return (lat, lon)
 
 
+def distancia_m_latlon(
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> float:
+    """Distância em metros entre dois (lat, lon)."""
+    from shapely.geometry import Point
+
+    from core.geo import crs_utm_local, para_metrico
+
+    lat, lon = a
+    crs = crs_utm_local(lon, lat)
+    return float(
+        para_metrico(Point(lon, lat), crs).distance(para_metrico(Point(b[1], b[0]), crs))
+    )
+
+
+def clique_proximo(
+    a: tuple[float, float] | None,
+    b: tuple[float, float] | None,
+    *,
+    raio_m: float = 15,
+) -> bool:
+    """True se os dois pinos caíram no mesmo pedaço de asfalto."""
+    if a is None or b is None:
+        return False
+    return distancia_m_latlon(a, b) <= raio_m
+
+
 def fundir_coords(trechos: list[list[tuple[float, float]]]) -> list[tuple[float, float]]:
     """Concatena polilinhas (lon, lat), sem repetir o vértice de emenda."""
     saida: list[tuple[float, float]] = []
@@ -976,7 +997,14 @@ def barreira_de_cliques(
 
     if len(cliques) < 2:
         raise ErroExterno("Clique o início e o fim em cima da rua.")
-    pontos = cliques[:3]
+    pontos: list[tuple[float, float]] = [cliques[0]]
+    for pino in cliques[1:3]:
+        if not clique_proximo(pontos[-1], pino, raio_m=8):
+            pontos.append(pino)
+    if len(pontos) < 2:
+        raise ErroExterno(
+            "Os pontos grudaram no mesmo lugar. Clique o início e o fim mais separados."
+        )
     nome = expandir_abrev_via(nome_via_de_entrada(nome) or nome)
     if not nome:
         raise ErroExterno("Informe o nome da rua para o trecho desenhado.")

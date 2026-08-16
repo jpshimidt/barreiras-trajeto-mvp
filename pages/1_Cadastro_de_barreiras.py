@@ -18,6 +18,7 @@ from core.barreiras_osm import (
     buscar_barreira_entre_links,
     buscar_barreiras_rua,
     clique_distinto,
+    clique_proximo,
     colar_clique_na_via,
     comprimento_m,
     extremos_preview,
@@ -56,20 +57,41 @@ def _pino_letra(lat: float, lon: float, letra: str, cor: str) -> folium.Marker:
     )
 
 
-def _grupo_pinos(
+def _grupo_preview(
+    barreiras: list[Barreira],
+    *,
     cliques: list[tuple[float, float]] | None = None,
-    extremos: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    mostrar_extremos: bool = False,
 ) -> folium.FeatureGroup:
-    grupo = folium.FeatureGroup(name="pinos")
+    """Linha vermelha + pinos — vai no FeatureGroup para o mapa não remountar."""
+    grupo = folium.FeatureGroup(name="preview")
+    for i, barreira in enumerate(barreiras, start=1):
+        folium.GeoJson(
+            barreira.geometria.__geo_interface__,
+            style_function=lambda _: {"color": COR_BARREIRA, "weight": 7, "opacity": 0.9},
+            tooltip=f"{i}. {barreira.rotulo}",
+        ).add_to(grupo)
+        lon, lat = barreira.geometria.centroid.coords[0]
+        folium.Marker(
+            [lat, lon],
+            tooltip=f"Trecho {i}",
+            icon=folium.DivIcon(
+                html=(
+                    f'<div style="font-size:12px;font-weight:700;color:#fff;'
+                    f'background:#d1242f;border-radius:10px;padding:1px 6px">{i}</div>'
+                )
+            ),
+        ).add_to(grupo)
     pontos: list[tuple[tuple[float, float], str, str]] = []
     if cliques:
-        cores = {1: "#1d4ed8", 2: "#1d4ed8", 3: "#1d4ed8"}
-        letras = {1: "A", 2: "B", 3: "C"}
         for i, par in enumerate(cliques, start=1):
-            pontos.append((par, letras.get(i, str(i)), cores.get(i, "#1d4ed8")))
-    elif extremos:
-        pontos.append((extremos[0], "A", "#111827"))
-        pontos.append((extremos[1], "B", "#111827"))
+            letra = {1: "A", 2: "B", 3: "C"}.get(i, str(i))
+            pontos.append((par, letra, "#1d4ed8"))
+    elif mostrar_extremos:
+        extremos = extremos_preview(barreiras)
+        if extremos:
+            pontos.append((extremos[0], "A", "#111827"))
+            pontos.append((extremos[1], "B", "#111827"))
     for (lat, lon), letra, cor in pontos:
         folium.CircleMarker(
             [lat, lon],
@@ -112,23 +134,13 @@ def _mapa_preview(
         mapa.get_root().header.add_child(
             folium.Element("<style>.leaflet-container{cursor:crosshair!important}</style>")
         )
-    for i, barreira in enumerate(barreiras, start=1):
-        folium.GeoJson(
-            barreira.geometria.__geo_interface__,
-            style_function=lambda _: {"color": COR_BARREIRA, "weight": 7, "opacity": 0.9},
-            tooltip=f"{i}. {barreira.rotulo}",
-        ).add_to(mapa)
-        lon, lat = barreira.geometria.centroid.coords[0]
-        folium.Marker(
-            [lat, lon],
-            tooltip=f"Trecho {i}",
-            icon=folium.DivIcon(
-                html=(
-                    f'<div style="font-size:12px;font-weight:700;color:#fff;'
-                    f'background:#d1242f;border-radius:10px;padding:1px 6px">{i}</div>'
-                )
-            ),
-        ).add_to(mapa)
+    if not detalhado:
+        for i, barreira in enumerate(barreiras, start=1):
+            folium.GeoJson(
+                barreira.geometria.__geo_interface__,
+                style_function=lambda _: {"color": COR_BARREIRA, "weight": 7, "opacity": 0.9},
+                tooltip=f"{i}. {barreira.rotulo}",
+            ).add_to(mapa)
     if barreiras and not centro:
         minx, miny, maxx, maxy = barreiras[0].geometria.bounds
         for barreira in barreiras[1:]:
@@ -146,6 +158,7 @@ def _limpar_formulario() -> None:
         "preview_rotulo",
         "preview_descartados",
         "preview_cliques",
+        "preview_cliques_crus",
         "preview_click_visto",
         "preview_modo_mapa",
         "preview_modo_visto",
@@ -196,6 +209,7 @@ def _metadados_form() -> dict:
 def _limpar_cliques() -> None:
     """Tira os pinos sem remountar o mapa — o zoom que você fez fica."""
     st.session_state["preview_cliques"] = []
+    st.session_state["preview_cliques_crus"] = []
     st.session_state.pop("preview_click_visto", None)
 
 
@@ -215,8 +229,10 @@ def _aplicar_preview(
     st.session_state["preview_barreiras"] = preview
     st.session_state["preview_rotulo"] = rotulo or (preview[0].rotulo if preview else "")
     st.session_state["preview_descartados"] = descartados
-    _resetar_ajuste_mapa()
-    if not manter_vista:
+    if manter_vista:
+        _limpar_cliques()
+    else:
+        _resetar_ajuste_mapa()
         st.session_state.pop("preview_mapa_view", None)
         st.session_state["preview_forcar_conferir"] = True
 
@@ -429,7 +445,12 @@ def _secao_formulario() -> None:
         with col_desfazer:
             if cliques and st.button("Desfazer", key="preview_desfazer_clique"):
                 cliques.pop()
+                crus = list(st.session_state.get("preview_cliques_crus") or [])
+                cru_desfeito = crus.pop() if crus else None
                 st.session_state["preview_cliques"] = cliques
+                st.session_state["preview_cliques_crus"] = crus
+                if cru_desfeito:
+                    st.session_state["preview_click_visto"] = cru_desfeito
                 st.rerun()
         with col_limpar:
             if st.button("Limpar pinos", key="preview_limpar_cliques"):
@@ -447,10 +468,11 @@ def _secao_formulario() -> None:
         st.session_state.pop("preview_zoom_rua", None)
 
     geracao = int(st.session_state.get("preview_mapa_geracao") or 0)
-    chave_mapa = f"preview_mapa_{geracao}_" + "-".join(b.id for b in preview)
-    grupo = _grupo_pinos(
+    chave_mapa = f"preview_mapa_{geracao}"
+    grupo = _grupo_preview(
+        preview,
         cliques=cliques if modo != "Conferir" else None,
-        extremos=extremos_preview(preview) if modo == "Conferir" else None,
+        mostrar_extremos=modo == "Conferir",
     )
     mapa_out = st_folium(
         _mapa_preview(preview, detalhado=True),
@@ -467,14 +489,20 @@ def _secao_formulario() -> None:
             cru = novo
             novo = colar_clique_na_via(*cru)
             st.session_state["preview_click_visto"] = cru
-            cliques.append(novo)
-            st.session_state["preview_cliques"] = cliques[:3]
-            if modo == "Ajustar início/fim" and len(cliques) >= 2:
-                _retracar_por_cliques(nome or preview[0].nome, cliques[:2])
-            elif modo == "Desenhar no eixo" and len(cliques) >= 3:
-                _retracar_por_cliques(nome or preview[0].nome, cliques[:3])
+            if cliques and clique_proximo(cliques[-1], novo):
+                st.warning("Esse clique grudou no mesmo ponto. Clique mais longe, no outro extremo da rua.")
             else:
-                st.rerun()
+                cliques.append(novo)
+                crus = list(st.session_state.get("preview_cliques_crus") or [])
+                crus.append(cru)
+                st.session_state["preview_cliques"] = cliques[:3]
+                st.session_state["preview_cliques_crus"] = crus[:3]
+                if modo == "Ajustar início/fim" and len(cliques) >= 2:
+                    _retracar_por_cliques(nome or preview[0].nome, cliques[:2])
+                elif modo == "Desenhar no eixo" and len(cliques) >= 3:
+                    _retracar_por_cliques(nome or preview[0].nome, cliques[:3])
+                else:
+                    st.rerun()
 
     st.markdown("**2. Ajustar** — tipo, faixa e paridade (não mudam o desenho)")
     col1, col2, col3, col4 = st.columns(4)
