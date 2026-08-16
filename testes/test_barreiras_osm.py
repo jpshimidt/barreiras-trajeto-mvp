@@ -39,6 +39,14 @@ def test_nome_via_sem_numero_estilo_maps():
     assert nome_via_de_entrada(texto) == "Rua Cruz de Malta"
 
 
+def test_nome_via_de_link_maps_completo():
+    url = (
+        "https://www.google.com/maps/place/R.+Cruz+de+Malta+-+Parada+Inglesa,"
+        "+S%C3%A3o+Paulo+-+SP/@-23.478,-46.608,17z"
+    )
+    assert nome_via_de_entrada(url) == "Rua Cruz de Malta"
+
+
 def test_nome_via_mantem_texto_simples():
     assert nome_via_de_entrada("Marginal Tietê") == "Marginal Tietê"
 
@@ -231,6 +239,40 @@ def test_buscar_barreiras_google_primeiro(monkeypatch):
     assert len(barreiras) == 1
     assert barreiras[0].nome == "Rua Cruz de Malta"
     assert barreiras[0].tipo == "avenida"
+
+
+def test_buscar_barreiras_aplica_faixa_e_paridade(monkeypatch):
+    feature_google = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-46.60, -23.48], [-46.59, -23.48]],
+        },
+        "properties": {
+            "id": "rua-cruz-de-malta-google-directions",
+            "nome": "Rua Cruz de Malta",
+            "tipo": "rua",
+            "municipio": "São Paulo",
+            "origem": "google-directions",
+        },
+    }
+    monkeypatch.setattr(
+        "core.barreiras_osm.buscar_features_google_rota",
+        lambda *a, **k: [feature_google],
+    )
+    barreiras = buscar_barreiras_rua(
+        "https://www.google.com/maps/place/R.+Cruz+de+Malta+-+Parada+Inglesa,"
+        "+S%C3%A3o+Paulo+-+SP/@-23.478,-46.608,17z",
+        numero_inicio=100,
+        numero_fim=800,
+        paridade="impar",
+        tipo="rua",
+    )
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"
+    assert barreiras[0].numero_inicio == 100
+    assert barreiras[0].numero_fim == 800
+    assert barreiras[0].paridade == "impar"
 
 
 def test_buscar_barreira_entre_pontos(monkeypatch):

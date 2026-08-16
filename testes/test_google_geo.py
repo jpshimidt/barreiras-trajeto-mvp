@@ -6,8 +6,11 @@ from core.endereco_maps import Local, parse_endereco_maps
 from core.google_geo import (
     PlacesApiNovaIndisponivel,
     buscar_sugestoes_endereco,
+    endereco_de_link_maps,
     extrair_coordenadas_maps_url,
+    extrair_nome_de_url_maps,
     local_de_selecao_widget,
+    parece_link_maps,
 )
 
 
@@ -18,6 +21,46 @@ def test_extrair_coordenadas_de_link_maps():
     lat, lon = coords
     assert round(lat, 6) == -23.484082
     assert round(lon, 6) == -46.600658
+
+
+def test_parece_link_maps():
+    assert parece_link_maps("https://maps.app.goo.gl/abc123")
+    assert parece_link_maps(
+        "https://www.google.com/maps/place/R.+Cruz+de+Malta/@-23.48,-46.60,17z"
+    )
+    assert not parece_link_maps("R. Cruz de Malta - Parada Inglesa, São Paulo")
+
+
+def test_extrair_nome_de_url_place():
+    url = (
+        "https://www.google.com/maps/place/R.+Cruz+de+Malta+-+Parada+Inglesa,"
+        "+S%C3%A3o+Paulo+-+SP/@-23.478,-46.608,17z"
+    )
+    assert extrair_nome_de_url_maps(url) == "R. Cruz de Malta - Parada Inglesa, São Paulo - SP"
+
+
+def test_endereco_de_link_maps_sem_rede():
+    url = (
+        "https://www.google.com/maps/place/R.+Cruz+de+Malta+-+Parada+Inglesa,"
+        "+S%C3%A3o+Paulo+-+SP/@-23.478,-46.608,17z"
+    )
+    assert "Cruz de Malta" in endereco_de_link_maps(url)
+
+
+def test_endereco_de_link_curto_segue_redirect(monkeypatch):
+    class Resp:
+        url = (
+            "https://www.google.com/maps/place/R.+Cruz+de+Malta+-+Tucuruvi,"
+            "+S%C3%A3o+Paulo+-+SP/@-23.478,-46.608,17z"
+        )
+
+    class Sessao:
+        def get(self, url, **kwargs):
+            assert "goo.gl" in url
+            return Resp()
+
+    texto = endereco_de_link_maps("https://maps.app.goo.gl/abc123", Sessao())
+    assert "Cruz de Malta" in texto
 
 
 def test_local_de_widget_confirma_numero():
