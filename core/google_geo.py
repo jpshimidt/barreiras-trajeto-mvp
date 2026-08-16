@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
@@ -264,6 +265,40 @@ def _geocode_legacy(texto: str, api_key: str, endereco: EnderecoMaps) -> list[Lo
     return locais
 
 
+def parece_link_maps(texto: str) -> bool:
+    """True se o texto é um link do Google Maps (curto ou completo)."""
+    t = texto.strip().lower()
+    return any(
+        trecho in t
+        for trecho in (
+            "google.com/maps",
+            "maps.google.",
+            "maps.app.goo.gl",
+            "goo.gl/maps",
+        )
+    )
+
+
+def extrair_nome_de_url_maps(url: str) -> str | None:
+    """Nome do lugar no path (/place/…, /search/…) ou no parâmetro q=."""
+    parsed = urlparse(url.strip())
+    partes = [p for p in parsed.path.split("/") if p]
+    for i, parte in enumerate(partes):
+        if parte in ("place", "search") and i + 1 < len(partes):
+            nome = unquote(partes[i + 1].replace("+", " ")).strip()
+            if nome and not nome.startswith("@"):
+                return nome
+    qs = parse_qs(parsed.query)
+    for chave in ("q", "query"):
+        valores = qs.get(chave) or []
+        if not valores:
+            continue
+        valor = unquote(valores[0].replace("+", " ")).strip()
+        if valor and not re.match(r"^-?\d+\.?\d*\s*,\s*-?\d+", valor):
+            return valor
+    return None
+
+
 def extrair_coordenadas_maps_url(url: str) -> tuple[float, float] | None:
     """Extrai lat/lon de links compartilhados do Google Maps."""
     match = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", url)
@@ -272,4 +307,82 @@ def extrair_coordenadas_maps_url(url: str) -> tuple[float, float] | None:
     match = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", url)
     if match:
         return float(match.group(1)), float(match.group(2))
+    match = re.search(r"[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)", url)
+    if match:
+        return float(match.group(1)), float(match.group(2))
     return None
+
+
+def resolver_link_maps(url: str, sessao: requests.Session | None = None) -> str:
+    """Segue redirecionamentos de links curtos (maps.app.goo.gl)."""
+    sessao = sessao or requests.Session()
+    try:
+        resp = sessao.get(
+            url,
+            allow_redirects=True,
+            timeout=TIMEOUT_S,
+            headers={"User-Agent": "barreiras-trajeto-mvp/0.1 (cadastro de barreiras)"},
+        )
+        return str(resp.url or url)
+    except requests.RequestException:
+        return url
+
+
+def geocode_reverso(lat: float, lon: float, api_key: str) -> str | None:
+    """Endereço formatado a partir de uma coordenada (Geocoding legado)."""
+    try:
+        resp = requests.get(
+            GEOCODE_URL,
+            params={
+                "latlng": f"{lat},{lon}",
+                "key": api_key,
+                "language": "pt-BR",
+                "result_type": "route|street_address",
+            },
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    dados = resp.json()
+    if dados.get("status") != "OK":
+        return None
+    for resultado in dados.get("results") or []:
+        formatado = (resultado.get("formatted_address") or "").strip()
+        if formatado:
+            return formatado
+    return None
+
+
+def endereco_de_link_maps(url: str, sessao: requests.Session | None = None) -> str:
+    """
+    Converte link do Google Maps em endereço/nome de rua.
+
+    Links completos (`/place/R.+Cruz+de+Malta…`) não precisam de rede.
+    Links curtos (`maps.app.goo.gl`) seguem o redirecionamento.
+    Se só houver coordenadas, faz geocode reverso.
+    """
+    url = url.strip()
+    nome = extrair_nome_de_url_maps(url)
+    if nome:
+        return nome
+
+    final = resolver_link_maps(url, sessao)
+    nome = extrair_nome_de_url_maps(final)
+    if nome:
+        return nome
+
+    coords = extrair_coordenadas_maps_url(final) or extrair_coordenadas_maps_url(url)
+    if coords:
+        api_key = ler_google_api_key()
+        if api_key:
+            reverso = geocode_reverso(coords[0], coords[1], api_key)
+            if reverso:
+                return reverso
+        return f"{coords[0]}, {coords[1]}"
+
+    raise ErroExterno(
+        "Não consegui ler a rua neste link do Google Maps. "
+        "Abra o lugar no Maps, copie o link completo (ou o endereço) e cole de novo."
+    )

@@ -19,7 +19,7 @@ from core.barreiras_osm import (
 )
 from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
-from core.google_geo import buscar_sugestoes_endereco, ler_google_api_key
+from core.google_geo import buscar_sugestoes_endereco, ler_google_api_key, parece_link_maps
 from core.rate_limit import consumir_busca_barreira_osm
 
 ARQUIVO_BARREIRAS = Path(__file__).resolve().parent.parent / "dados" / "barreiras.geojson"
@@ -60,10 +60,9 @@ def _limpar_preview() -> None:
 def _secao_nova_barreira() -> None:
     st.subheader("Nova barreira")
     st.caption(
-        "Informe o **nome ou endereço da rua**. O traçado vem do Google Maps "
-        "(não depende do OpenStreetMap). "
-        "Deixe os números em branco (ou 0) para cadastrar a **rua inteira**. "
-        "Se a busca automática falhar, marque o início e o fim no mapa abaixo."
+        "Cole o **link do Google Maps** da rua (ou o endereço). "
+        "Depois ajuste só o **nº início/fim**, a **paridade** e o **tipo**. "
+        "Números em 0 = rua inteira."
     )
 
     pendente = st.session_state.pop("_nova_aplicar_sugestao", None)
@@ -72,14 +71,14 @@ def _secao_nova_barreira() -> None:
         st.session_state.pop("nova_sugestoes", None)
 
     entrada = st.text_input(
-        "Endereço ou nome da rua",
+        "Link do Google Maps, endereço ou nome da rua",
         key="nova_entrada",
-        placeholder="Ex.: R. Cruz de Malta — ou cole como no Google Maps",
-        help="Pode ser só o nome da via ou um endereço completo em São Paulo.",
+        placeholder="https://maps.app.goo.gl/…  ou  R. Cruz de Malta, São Paulo",
+        help="Cole o link compartilhado do Maps, o endereço completo ou só o nome da via.",
     )
 
     api_key = ler_google_api_key()
-    if api_key and entrada.strip():
+    if api_key and entrada.strip() and not parece_link_maps(entrada):
         if st.button("Buscar sugestões de endereço", key="nova_google", type="secondary"):
             try:
                 st.session_state["nova_sugestoes"] = buscar_sugestoes_endereco(entrada.strip(), api_key)
@@ -123,7 +122,7 @@ def _secao_nova_barreira() -> None:
 
     if st.button("Buscar rua no mapa", type="primary", key="nova_buscar_osm"):
         if not entrada.strip():
-            st.error("Informe o endereço ou nome da rua.")
+            st.error("Cole o link do Google Maps ou o nome da rua.")
         else:
             try:
                 consumir_busca_barreira_osm()
@@ -199,6 +198,9 @@ def _secao_nova_barreira() -> None:
                                 pontos[0],
                                 pontos[1],
                                 tipo=tipo,
+                                numero_inicio=int(numero_inicio) or None,
+                                numero_fim=int(numero_fim) or None,
+                                paridade=paridade or None,
                             )
                     except ErroExterno as e:
                         st.error(str(e))
@@ -271,7 +273,7 @@ store = _store()
 st.title("🛠️ Cadastro de barreiras")
 st.caption(
     "Cadastre ruas que funcionam como barreira física. "
-    "Basta informar o endereço — a geometria vem do mapa."
+    "Cole o link do Google Maps e ajuste número, paridade e tipo."
 )
 st.info(f"Armazenamento: **{descricao_store(store)}**")
 

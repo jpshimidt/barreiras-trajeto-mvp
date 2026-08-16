@@ -88,12 +88,20 @@ def expandir_abrev_via(nome: str) -> str:
 
 
 def nome_via_de_entrada(texto: str) -> str:
-    """Extrai logradouro de endereço colado ou devolve o texto como nome de rua."""
+    """Extrai logradouro de endereço, link do Maps ou texto livre."""
     texto = texto.strip()
     if not texto:
         return ""
+    from core.google_geo import extrair_nome_de_url_maps, parece_link_maps
+
+    if parece_link_maps(texto):
+        extraido = extrair_nome_de_url_maps(texto)
+        if extraido:
+            texto = extraido
     endereco = parse_endereco_maps(texto)
     nome = (endereco.logradouro or texto).strip()
+    if parece_link_maps(nome):
+        return ""
     return expandir_abrev_via(nome)
 
 
@@ -742,6 +750,9 @@ def buscar_barreira_entre_pontos(
     destino: tuple[float, float],
     *,
     tipo: str | None = None,
+    numero_inicio: int | None = None,
+    numero_fim: int | None = None,
+    paridade: str | None = None,
 ) -> list[Barreira]:
     """Traça a barreira pelo caminho de carro entre dois cliques no mapa."""
     from core.google_geo import ler_google_api_key
@@ -755,7 +766,15 @@ def buscar_barreira_entre_pontos(
     feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
     if not feature:
         raise ErroExterno("O Google não devolveu um traçado entre os dois pontos.")
-    return _features_para_barreiras([feature])
+    barreiras = _features_para_barreiras([feature])
+    for barreira in barreiras:
+        if numero_inicio:
+            barreira.numero_inicio = numero_inicio
+        if numero_fim:
+            barreira.numero_fim = numero_fim
+        if paridade:
+            barreira.paridade = paridade
+    return barreiras
 
 
 def _features_fallback(
@@ -808,9 +827,14 @@ def buscar_barreiras_rua(
     Sem números de início/fim, importa todos os ways da via em São Paulo.
     Com faixa numérica, recorta cada trecho OSM quando houver ``addr:housenumber``.
     """
+    from core.google_geo import endereco_de_link_maps, parece_link_maps
+
+    if parece_link_maps(entrada):
+        entrada = endereco_de_link_maps(entrada)
+
     nome = nome_via_de_entrada(entrada)
     if not nome:
-        raise ErroExterno("Informe o nome ou endereço da rua.")
+        raise ErroExterno("Informe o nome, o endereço ou o link do Google Maps da rua.")
 
     trecho = RegistroTrecho(
         nome,
@@ -877,7 +901,13 @@ def buscar_barreiras_rua(
 
     tipo_fixo = _normalizar_tipo(tipo)
     barreiras = _features_para_barreiras(features)
-    if tipo_fixo:
-        for barreira in barreiras:
+    for barreira in barreiras:
+        if tipo_fixo:
             barreira.tipo = tipo_fixo
+        if trecho.numero_inicio:
+            barreira.numero_inicio = trecho.numero_inicio
+        if trecho.numero_fim:
+            barreira.numero_fim = trecho.numero_fim
+        if trecho.paridade:
+            barreira.paridade = trecho.paridade
     return barreiras
