@@ -118,6 +118,23 @@ def test_calcular_so_habilita_com_os_dois_enderecos(app):
     assert calcular.disabled is False
 
 
+def test_nova_consulta_limpa_enderecos(app):
+    """Botão para consultar outro aluno — zera casa, escola e resultado."""
+    at = preencher(app.run())
+    assert "R. Voluntários da Pátria, 1000 — Santana" in texto_da_pagina(at)
+    assert any(b.label == "Nova consulta" for b in at.button)
+
+    nova = next(b for b in at.button if b.label == "Nova consulta")
+    at = nova.click().run()
+
+    assert not at.exception
+    pagina = texto_da_pagina(at)
+    assert "R. Voluntários da Pátria, 1000 — Santana" not in pagina
+    assert "Av. Rudge, 700 — Bom Retiro" not in pagina
+    assert "COM DIREITO" not in pagina
+    assert "SEM DIREITO" not in pagina
+
+
 def test_endereco_formatado_volta_para_conferencia(app):
     """A proteção mais eficaz contra erro de geocodificação."""
     at = preencher(app.run())
