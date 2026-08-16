@@ -28,7 +28,7 @@ from core.barreiras_osm import (
 from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
 from core.rate_limit import consumir_busca_barreira_osm
-from core.ui import aplicar_estilo, marca
+from core.ui import aplicar_estilo, lead, marca
 
 ARQUIVO_BARREIRAS = Path(__file__).resolve().parent.parent / "dados" / "barreiras.geojson"
 COR_BARREIRA = "#d1242f"
@@ -581,11 +581,11 @@ def _secao_formulario() -> None:
 store = _store()
 
 st.page_link("app.py", label="← Consulta de elegibilidade")
-marca()
-st.title("🛠️ Cadastro de barreiras")
-st.caption(
-    "Cadastre ou edite ruas-barreira. Traçado **a pé** pelo eixo da via. "
-    "No mapa: dê zoom, clique perto da rua (o ponto gruda no asfalto) e troque para satélite se precisar."
+marca("Administração · barreiras")
+st.title("Cadastro de barreiras")
+lead(
+    "Traçado a pé pelo eixo da via. Dê zoom, clique perto da rua — o ponto gruda no asfalto — "
+    "e troque para satélite se precisar."
 )
 st.caption(f"Armazenamento: **{descricao_store(store)}**")
 
