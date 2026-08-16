@@ -42,14 +42,28 @@ html, body, [class*="css"] {
   background: linear-gradient(90deg, #1636a0, #2453d6 40%, #0f766e 78%, #e11d48);
 }
 
-[data-testid="stHeader"] { background: transparent; }
+[data-testid="stHeader"] {
+  background: transparent;
+  height: 2.5rem;
+}
 [data-testid="stToolbar"] { right: 1rem; }
 
-[data-testid="stAppViewContainer"] .main .block-container {
-  padding-top: 1.15rem;
-  padding-bottom: 4rem;
+[data-testid="stAppViewContainer"] .main .block-container,
+[data-testid="stMainBlockContainer"],
+.stMainBlockContainer,
+.block-container {
+  padding-top: 0.5rem !important;
+  padding-bottom: 3rem !important;
   max-width: 1320px;
 }
+
+/* Streamlit deixa um buraco grande no topo; zera margem extra do primeiro bloco. */
+[data-testid="stAppViewContainer"] .main .block-container > div:first-child {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+[data-testid="stDecoration"] { display: none; }
 
 [data-testid="stSidebar"] {
   background:
@@ -123,6 +137,7 @@ h1 {
   letter-spacing: -0.045em !important;
   font-weight: 700 !important;
   color: var(--ink) !important;
+  margin-top: 0 !important;
   margin-bottom: 0.35rem !important;
 }
 h2, h3 {
@@ -204,7 +219,7 @@ footer { visibility: hidden; }
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  margin: 0 0 0.7rem 0;
+  margin: 0 0 0.35rem 0;
   padding: 0.28rem 0.7rem;
   border-radius: 999px;
   background: rgba(36, 83, 214, 0.08);
