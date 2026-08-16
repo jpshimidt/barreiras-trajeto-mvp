@@ -111,8 +111,8 @@ def montar_mapa(rota: Rota, casa: Local, escola: Local, atingidas: list[Barreira
             barreira.geometria.__geo_interface__,
             style_function=lambda _, tocada=tocada: {
                 "color": COR_BARREIRA,
-                "weight": 5 if tocada else 2,
-                "opacity": 0.9 if tocada else 0.35,
+                "weight": 12 if tocada else 5,
+                "opacity": 1.0 if tocada else 0.55,
             },
             tooltip=f"{barreira.rotulo} ({barreira.tipo})",
         ).add_to(mapa)

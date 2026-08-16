@@ -70,7 +70,7 @@ def _grupo_preview(
     for i, barreira in enumerate(barreiras, start=1):
         folium.GeoJson(
             barreira.geometria.__geo_interface__,
-            style_function=lambda _: {"color": COR_BARREIRA, "weight": 7, "opacity": 0.9},
+            style_function=lambda _: {"color": COR_BARREIRA, "weight": 10, "opacity": 1.0},
             tooltip=f"{i}. {barreira.rotulo}",
         ).add_to(grupo)
         lon, lat = barreira.geometria.centroid.coords[0]
@@ -140,7 +140,7 @@ def _mapa_preview(
         for i, barreira in enumerate(barreiras, start=1):
             folium.GeoJson(
                 barreira.geometria.__geo_interface__,
-                style_function=lambda _: {"color": COR_BARREIRA, "weight": 7, "opacity": 0.9},
+                style_function=lambda _: {"color": COR_BARREIRA, "weight": 10, "opacity": 1.0},
                 tooltip=f"{i}. {barreira.rotulo}",
             ).add_to(mapa)
     if barreiras and not centro:
