@@ -8,8 +8,11 @@ import requests
 from core.barreiras_osm import (
     OVERPASS_ENDPOINTS,
     OverpassIndisponivel,
+    aplicar_metadados,
+    buscar_barreira_entre_links,
     buscar_barreira_entre_pontos,
     buscar_barreiras_rua,
+    comprimento_m,
     consultar_overpass,
     decodificar_polyline,
     feature_de_way,
@@ -289,3 +292,56 @@ def test_buscar_barreira_entre_pontos(monkeypatch):
     )
     assert len(barreiras) == 1
     assert barreiras[0].nome == "Rua Cruz de Malta"
+
+
+def test_buscar_barreira_entre_links(monkeypatch):
+    monkeypatch.setattr(
+        "core.google_geo.pin_de_link_maps",
+        lambda url, sessao=None: (
+            (-23.480, -46.610) if "ini" in url else (-23.476, -46.606)
+        ),
+    )
+    monkeypatch.setattr(
+        "core.barreiras_osm.directions_entre_pontos",
+        lambda origem, destino, api_key=None: [(-46.610, -23.480), (-46.606, -23.476)],
+    )
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+    barreiras = buscar_barreira_entre_links(
+        "Rua Cruz de Malta",
+        "https://maps.google.com/ini",
+        "https://maps.google.com/fim",
+        tipo="rua",
+        numero_inicio=1,
+        numero_fim=400,
+        paridade="ambos",
+    )
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"
+    assert barreiras[0].numero_inicio == 1
+    assert barreiras[0].numero_fim == 400
+
+
+def test_aplicar_metadados_e_comprimento():
+    from shapely.geometry import LineString
+
+    from core.barreiras import Barreira
+
+    barreira = Barreira(
+        id="x",
+        nome="R. Cruz de Malta",
+        tipo="avenida",
+        geometria=LineString([(-46.60, -23.48), (-46.599, -23.48)]),
+    )
+    aplicar_metadados(
+        [barreira],
+        nome="Rua Cruz de Malta",
+        tipo="rua",
+        numero_inicio=10,
+        numero_fim=200,
+        paridade="ambos",
+    )
+    assert barreira.nome == "Rua Cruz de Malta"
+    assert barreira.tipo == "rua"
+    assert barreira.numero_inicio == 10
+    assert barreira.paridade is None
+    assert comprimento_m(barreira) > 50

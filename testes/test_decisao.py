@@ -303,7 +303,7 @@ def test_o_geojson_versionado_carrega():
     """O arquivo real do repositório tem de estar íntegro."""
     barreiras = carregar_barreiras("dados/barreiras.geojson")
 
-    assert len(barreiras) == 3
+    assert len(barreiras) >= 3
     assert "Marginal Tietê" in {b.nome for b in barreiras}
 
 

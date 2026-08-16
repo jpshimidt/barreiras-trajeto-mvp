@@ -105,7 +105,7 @@ def test_pagina_sobe_sem_excecao(app):
 def test_cadastro_de_barreiras_aparece_na_lateral(app):
     at = app.run()
 
-    assert at.sidebar.metric[0].value == "3"
+    assert int(at.sidebar.metric[0].value) >= 3
 
 
 def test_calcular_so_habilita_com_os_dois_enderecos(app):

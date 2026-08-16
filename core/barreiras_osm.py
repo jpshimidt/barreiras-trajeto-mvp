@@ -777,6 +777,76 @@ def buscar_barreira_entre_pontos(
     return barreiras
 
 
+def buscar_barreira_entre_links(
+    nome: str,
+    link_inicio: str,
+    link_fim: str,
+    *,
+    tipo: str | None = None,
+    numero_inicio: int | None = None,
+    numero_fim: int | None = None,
+    paridade: str | None = None,
+) -> list[Barreira]:
+    """Traça a barreira pelo caminho entre dois pins de links do Google Maps."""
+    from core.google_geo import endereco_de_link_maps, pin_de_link_maps
+
+    origem = pin_de_link_maps(link_inicio)
+    destino = pin_de_link_maps(link_fim)
+    if origem == destino:
+        raise ErroExterno(
+            "Os dois links apontam para o mesmo ponto. "
+            "Cole o início e o fim da barreira (extremos da rua)."
+        )
+    nome_via = (nome or "").strip()
+    if not nome_via:
+        try:
+            nome_via = endereco_de_link_maps(link_inicio)
+        except ErroExterno:
+            nome_via = ""
+    if not nome_via:
+        raise ErroExterno("Informe o nome da rua ou use um link que traga o nome do lugar.")
+    return buscar_barreira_entre_pontos(
+        nome_via,
+        origem,
+        destino,
+        tipo=tipo,
+        numero_inicio=numero_inicio,
+        numero_fim=numero_fim,
+        paridade=paridade,
+    )
+
+
+def comprimento_m(barreira: Barreira) -> float:
+    """Comprimento da geometria em metros (UTM local)."""
+    from core.geo import crs_utm_local, para_metrico
+
+    lon, lat = barreira.geometria.centroid.coords[0]
+    return float(para_metrico(barreira.geometria, crs_utm_local(lon, lat)).length)
+
+
+def aplicar_metadados(
+    barreiras: list[Barreira],
+    *,
+    nome: str | None = None,
+    tipo: str | None = None,
+    numero_inicio: int | None = None,
+    numero_fim: int | None = None,
+    paridade: str | None = None,
+) -> list[Barreira]:
+    """Ajusta rótulo/tipo/faixa sem recalcular a geometria."""
+    tipo_fixo = _normalizar_tipo(tipo)
+    nome_limpo = expandir_abrev_via((nome or "").strip()) if nome else ""
+    for barreira in barreiras:
+        if nome_limpo:
+            barreira.nome = nome_limpo
+        if tipo_fixo:
+            barreira.tipo = tipo_fixo
+        barreira.numero_inicio = numero_inicio if numero_inicio else None
+        barreira.numero_fim = numero_fim if numero_fim else None
+        barreira.paridade = paridade if paridade and paridade != "ambos" else None
+    return barreiras
+
+
 def _features_fallback(
     sessao: requests.Session,
     nome: str,
