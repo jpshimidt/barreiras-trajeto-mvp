@@ -1,74 +1,208 @@
 {
-  "type": "FeatureCollection",
-  "name": "barreiras-teste-marco1",
-  "features": [
-    {
-      "type": "Feature",
-      "geometry": {
-        "type": "LineString",
-        "coordinates": [
-          [-46.6300, -23.5190],
-          [-46.6360, -23.5175],
-          [-46.6430, -23.5160],
-          [-46.6500, -23.5148],
-          [-46.6570, -23.5142],
-          [-46.6640, -23.5145]
-        ]
-      },
-      "properties": {
-        "id": "marginal-tiete-trecho-teste",
-        "nome": "Marginal Tietê",
-        "tipo": "via expressa",
-        "municipio": "São Paulo",
-        "origem": "manual",
-        "osm_way_id": null,
-        "importado_em": "2026-08-15"
-      }
-    },
-    {
-      "type": "Feature",
-      "geometry": {
-        "type": "LineString",
-        "coordinates": [
-          [-46.6640, -23.5140],
-          [-46.6655, -23.5090],
-          [-46.6670, -23.5030],
-          [-46.6680, -23.4960],
-          [-46.6690, -23.4890],
-          [-46.6700, -23.4830]
-        ]
-      },
-      "properties": {
-        "id": "caetano-alvares-trecho-teste",
-        "nome": "Avenida Engenheiro Caetano Álvares",
-        "tipo": "avenida",
-        "municipio": "São Paulo",
-        "origem": "manual",
-        "osm_way_id": null,
-        "importado_em": "2026-08-15"
-      }
-    },
-    {
-      "type": "Feature",
-      "geometry": {
-        "type": "LineString",
-        "coordinates": [
-          [-46.6900, -23.4960],
-          [-46.7000, -23.4930],
-          [-46.7100, -23.4905]
-        ]
-      },
-      "properties": {
-        "id": "inajar-de-souza-100-2500-teste",
-        "nome": "Avenida Inajar de Souza",
-        "tipo": "avenida",
-        "municipio": "São Paulo",
-        "origem": "manual",
-        "numero_inicio": 100,
-        "numero_fim": 2500,
-        "osm_way_id": null,
-        "importado_em": "2026-08-15"
-      }
-    }
-  ]
+ "type": "FeatureCollection",
+ "name": "barreiras",
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -46.63,
+      -23.519
+     ],
+     [
+      -46.636,
+      -23.5175
+     ],
+     [
+      -46.643,
+      -23.516
+     ],
+     [
+      -46.65,
+      -23.5148
+     ],
+     [
+      -46.657,
+      -23.5142
+     ],
+     [
+      -46.664,
+      -23.5145
+     ]
+    ]
+   },
+   "properties": {
+    "id": "marginal-tiete-trecho-teste",
+    "nome": "Marginal Tietê",
+    "tipo": "via expressa",
+    "municipio": "São Paulo",
+    "origem": "app",
+    "atualizado_em": "2026-08-16"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -46.664,
+      -23.514
+     ],
+     [
+      -46.6655,
+      -23.509
+     ],
+     [
+      -46.667,
+      -23.503
+     ],
+     [
+      -46.668,
+      -23.496
+     ],
+     [
+      -46.669,
+      -23.489
+     ],
+     [
+      -46.67,
+      -23.483
+     ]
+    ]
+   },
+   "properties": {
+    "id": "caetano-alvares-trecho-teste",
+    "nome": "Avenida Engenheiro Caetano Álvares",
+    "tipo": "avenida",
+    "municipio": "São Paulo",
+    "origem": "app",
+    "atualizado_em": "2026-08-16"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -46.69,
+      -23.496
+     ],
+     [
+      -46.7,
+      -23.493
+     ],
+     [
+      -46.71,
+      -23.4905
+     ]
+    ]
+   },
+   "properties": {
+    "id": "inajar-de-souza-100-2500-teste",
+    "nome": "Avenida Inajar de Souza",
+    "tipo": "avenida",
+    "municipio": "São Paulo",
+    "origem": "app",
+    "atualizado_em": "2026-08-16",
+    "numero_inicio": 100,
+    "numero_fim": 2500
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -46.5990608,
+      -23.4915908
+     ],
+     [
+      -46.5990569,
+      -23.49153
+     ],
+     [
+      -46.5990614,
+      -23.49145
+     ],
+     [
+      -46.5990783,
+      -23.4911928
+     ],
+     [
+      -46.5990815,
+      -23.4911455
+     ],
+     [
+      -46.5990864,
+      -23.4910723
+     ],
+     [
+      -46.5990927,
+      -23.4909786
+     ],
+     [
+      -46.5991009,
+      -23.4908913
+     ],
+     [
+      -46.5991768,
+      -23.4900875
+     ],
+     [
+      -46.5991862,
+      -23.4899875
+     ],
+     [
+      -46.5991964,
+      -23.4898872
+     ],
+     [
+      -46.5992244,
+      -23.4896115
+     ],
+     [
+      -46.5992748,
+      -23.4891159
+     ],
+     [
+      -46.5992881,
+      -23.4889855
+     ],
+     [
+      -46.5993145,
+      -23.4886516
+     ],
+     [
+      -46.5993467,
+      -23.488466
+     ],
+     [
+      -46.599368,
+      -23.4883061
+     ],
+     [
+      -46.5993989,
+      -23.4880747
+     ],
+     [
+      -46.5994129,
+      -23.48797
+     ]
+    ]
+   },
+   "properties": {
+    "id": "rua-cruz-de-malta-nominatim-153809955",
+    "nome": "Rua Cruz de Malta",
+    "tipo": "avenida",
+    "municipio": "São Paulo",
+    "origem": "app",
+    "atualizado_em": "2026-08-16"
+   }
+  }
+ ]
 }
