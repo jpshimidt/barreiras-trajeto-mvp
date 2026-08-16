@@ -8,6 +8,7 @@ import requests
 from core.barreiras_osm import (
     OVERPASS_ENDPOINTS,
     OverpassIndisponivel,
+    buscar_barreira_entre_pontos,
     buscar_barreiras_rua,
     consultar_overpass,
     decodificar_polyline,
@@ -30,7 +31,12 @@ def way(id_: int, nome: str, highway: str = "trunk", coords=((-46.63, -23.51), (
 
 def test_nome_via_de_endereco_maps():
     texto = "R. Borges, 353 - Parada Inglesa, São Paulo - SP, 02247-000"
-    assert nome_via_de_entrada(texto) == "R. Borges"
+    assert nome_via_de_entrada(texto) == "Rua Borges"
+
+
+def test_nome_via_sem_numero_estilo_maps():
+    texto = "R. Cruz de Malta - Parada Inglesa, São Paulo - SP, Brasil"
+    assert nome_via_de_entrada(texto) == "Rua Cruz de Malta"
 
 
 def test_nome_via_mantem_texto_simples():
@@ -44,6 +50,7 @@ def test_buscar_barreiras_rua_sem_rede(monkeypatch):
         return resposta
 
     monkeypatch.setattr("core.barreiras_osm.consultar_overpass", falso_overpass)
+    monkeypatch.setattr("core.barreiras_osm.buscar_features_google_rota", lambda *a, **k: [])
 
     barreiras = buscar_barreiras_rua("Marginal Tietê")
     assert len(barreiras) == 1
@@ -62,6 +69,7 @@ def test_buscar_barreiras_tenta_regex_quando_nome_exato_falha(monkeypatch):
         return {"elements": [way(2, "Via Marginal Tietê")]}
 
     monkeypatch.setattr("core.barreiras_osm.consultar_overpass", falso_overpass)
+    monkeypatch.setattr("core.barreiras_osm.buscar_features_google_rota", lambda *a, **k: [])
 
     barreiras = buscar_barreiras_rua("Marginal Tietê")
     assert chamadas == [False, True]
@@ -74,6 +82,8 @@ def test_buscar_barreiras_falha_clara(monkeypatch):
         "core.barreiras_osm.consultar_overpass",
         lambda sessao, consulta: {"elements": []},
     )
+    monkeypatch.setattr("core.barreiras_osm.buscar_features_google_rota", lambda *a, **k: [])
+    monkeypatch.setattr("core.barreiras_osm.buscar_features_nominatim", lambda *a, **k: [])
     with pytest.raises(ErroExterno, match="Nenhum trecho encontrado"):
         buscar_barreiras_rua("Rua Inexistente XYZ", regex=True)
 
@@ -137,6 +147,7 @@ def test_buscar_barreiras_usa_nominatim_quando_overpass_indisponivel(monkeypatch
     }
 
     monkeypatch.setattr("core.barreiras_osm.consultar_overpass", overpass_falha)
+    monkeypatch.setattr("core.barreiras_osm.buscar_features_google_rota", lambda *a, **k: [])
     monkeypatch.setattr(
         "core.barreiras_osm.buscar_features_nominatim",
         lambda sessao, nome, trecho=None: [feature_nominatim],
@@ -184,5 +195,55 @@ def test_buscar_barreiras_usa_google_quando_nominatim_falha(monkeypatch):
     )
 
     barreiras = buscar_barreiras_rua("Rua Cruz de Malta")
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"
+
+
+def test_buscar_barreiras_google_primeiro(monkeypatch):
+    feature_google = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[-46.60, -23.48], [-46.59, -23.48]],
+        },
+        "properties": {
+            "id": "rua-cruz-de-malta-google-directions",
+            "nome": "Rua Cruz de Malta",
+            "tipo": "avenida",
+            "municipio": "São Paulo",
+            "origem": "google-directions",
+        },
+    }
+    monkeypatch.setattr(
+        "core.barreiras_osm.buscar_features_google_rota",
+        lambda *a, **k: [feature_google],
+    )
+
+    def overpass_nao_deve_ser_chamado(*args, **kwargs):
+        raise AssertionError("Overpass não deveria ser consultado se o Google achou a via")
+
+    monkeypatch.setattr("core.barreiras_osm.consultar_overpass", overpass_nao_deve_ser_chamado)
+
+    barreiras = buscar_barreiras_rua(
+        "R. Cruz de Malta - Parada Inglesa, São Paulo - SP, Brasil",
+        tipo="avenida",
+    )
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"
+    assert barreiras[0].tipo == "avenida"
+
+
+def test_buscar_barreira_entre_pontos(monkeypatch):
+    monkeypatch.setattr(
+        "core.barreiras_osm.directions_entre_pontos",
+        lambda origem, destino, api_key=None: [(-46.60, -23.48), (-46.59, -23.48)],
+    )
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+    barreiras = buscar_barreira_entre_pontos(
+        "R. Cruz de Malta",
+        (-23.48, -46.60),
+        (-23.48, -46.59),
+        tipo="rua",
+    )
     assert len(barreiras) == 1
     assert barreiras[0].nome == "Rua Cruz de Malta"
