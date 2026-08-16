@@ -295,6 +295,34 @@
     "origem": "app",
     "atualizado_em": "2026-08-16"
    }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "LineString",
+    "coordinates": [
+     [
+      -46.50163,
+      -23.7033301
+     ],
+     [
+      -46.5033856,
+      -23.7037142
+     ],
+     [
+      -46.5034648,
+      -23.7037311
+     ]
+    ]
+   },
+   "properties": {
+    "id": "rua-cruz-de-malta-nominatim-1181833900",
+    "nome": "Rua Cruz de Malta",
+    "tipo": "avenida",
+    "municipio": "São Paulo",
+    "origem": "app",
+    "atualizado_em": "2026-08-16"
+   }
   }
  ]
 }
