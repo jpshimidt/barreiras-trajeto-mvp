@@ -11,6 +11,7 @@ import streamlit_authenticator as stauth
 from core.rate_limit import registrar_tentativa_login_falha
 from core.seguranca import cookie_key_segura, senha_parece_hash
 from core.sessao_privada import limpar_dados_pessoais_sessao
+from core.ui import aplicar_estilo, marca
 
 
 def _to_plain_dict(valor: Any) -> Any:
@@ -118,6 +119,7 @@ def exigir_login() -> bool:
 
     Credenciais em secrets.toml / Streamlit Cloud Secrets, seção [auth].
     """
+    aplicar_estilo()
     autenticado_antes = bool(st.session_state.get("authentication_status"))
 
     config = _config_auth()
@@ -160,25 +162,48 @@ def exigir_login() -> bool:
         float(cookie.get("expiry_days") or config.get("cookie_expiry_days") or 30),
         auto_hash=False,
     )
+    campos_login = {
+        "Form name": "Entrar",
+        "Username": "Usuário (não use e-mail)",
+        "Password": "Senha",
+        "Login": "Entrar",
+    }
 
-    usernames_cadastrados = sorted(credenciais.get("usernames", {}).keys())
-    if usernames_cadastrados:
-        exemplos = ", ".join(f"`{u}`" for u in usernames_cadastrados[:3])
-        st.caption(
-            f"Use o **usuário** ({exemplos}), não o e-mail. "
-            "Digite a **senha normal** — o hash bcrypt fica só nos Secrets."
-        )
-
-    authenticator.login(
-        location="main",
-        key="login_form",
-        fields={
-            "Form name": "Entrar",
-            "Username": "Usuário (não use e-mail)",
-            "Password": "Senha",
-            "Login": "Entrar",
-        },
-    )
+    if st.session_state.get("authentication_status"):
+        authenticator.login(location="unrendered", key="login_form", fields=campos_login)
+    else:
+        _coluna_esq, centro, _coluna_dir = st.columns([0.85, 1.3, 0.85])
+        with centro:
+            marca()
+            st.title("Entrar")
+            st.caption(
+                "Consulta de elegibilidade ao transporte escolar no município de São Paulo."
+            )
+            usernames_cadastrados = sorted(credenciais.get("usernames", {}).keys())
+            if usernames_cadastrados:
+                exemplos = ", ".join(f"`{u}`" for u in usernames_cadastrados[:3])
+                st.caption(
+                    f"Use o **usuário** ({exemplos}), não o e-mail. "
+                    "Digite a **senha normal** — o hash bcrypt fica só nos Secrets."
+                )
+            authenticator.login(location="main", key="login_form", fields=campos_login)
+            status = st.session_state.get("authentication_status")
+            if status is False:
+                try:
+                    registrar_tentativa_login_falha()
+                except Exception as e:
+                    st.error(str(e))
+                    st.stop()
+                st.error(
+                    "Usuário ou senha incorretos. "
+                    "Confira o **usuário** (ex.: admin, não o e-mail) e a senha em texto normal."
+                )
+            elif status is None:
+                st.info("Faça login para usar a consulta de elegibilidade.")
+            st.markdown(
+                '<p class="login-rodape">Endereços ficam só nesta sessão. Sem histórico.</p>',
+                unsafe_allow_html=True,
+            )
 
     autenticado_agora = bool(st.session_state.get("authentication_status"))
     if autenticado_antes and not autenticado_agora:
@@ -186,22 +211,11 @@ def exigir_login() -> bool:
 
     if autenticado_agora:
         with st.sidebar:
+            marca()
+            st.caption(f"Olá, **{st.session_state.get('name', '')}**")
             authenticator.logout(location="sidebar", key="logout_btn")
-            st.caption(f"Logado como **{st.session_state.get('name', '')}**")
         return True
 
-    if st.session_state.get("authentication_status") is False:
-        try:
-            registrar_tentativa_login_falha()
-        except Exception as e:
-            st.error(str(e))
-            st.stop()
-        st.error(
-            "Usuário ou senha incorretos. "
-            "Confira o **usuário** (ex.: admin, não o e-mail) e a senha em texto normal."
-        )
-    else:
-        st.info("Faça login para usar a consulta de elegibilidade.")
     st.stop()
     return False
 

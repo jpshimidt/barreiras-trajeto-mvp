@@ -42,6 +42,7 @@ from core.google_geo import (
     ler_google_api_key,
 )
 from core.routing import Rota, rota_a_pe
+from core.ui import aplicar_estilo, marca
 
 ARQUIVO_BARREIRAS = Path(__file__).parent / "dados" / "barreiras.geojson"
 
@@ -335,9 +336,9 @@ def campo_endereco_busca_google(rotulo: str, chave: str, exemplo: str, api_key: 
 
     if not local_salvo:
         _expander_link_maps(chave)
-        st.info(
+        st.caption(
             "Digite o endereço e clique em **Buscar sugestões**, "
-            "ou use um link do Maps no expander abaixo."
+            "ou use um link do Maps abaixo."
         )
         return None
 
@@ -470,6 +471,8 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
 
 
 def pagina_principal() -> None:
+    aplicar_estilo()
+    marca()
     st.title("🚌 Elegibilidade a transporte escolar")
     st.caption(
         "Município de São Paulo. Digite o endereço, busque sugestões ou cole como no Maps. "
@@ -477,8 +480,22 @@ def pagina_principal() -> None:
         "em alguma rua cadastrada como barreira. A rota é sempre a pé, nunca GPS de carro."
     )
 
+    guia1, guia2, guia3 = st.columns(3)
+    with guia1:
+        with st.container(border=True):
+            st.markdown("**1. Endereços**")
+            st.caption("Casa e escola em São Paulo, como no Maps.")
+    with guia2:
+        with st.container(border=True):
+            st.markdown("**2. Caminho a pé**")
+            st.caption("O menor trajeto a pé — nunca GPS de carro.")
+    with guia3:
+        with st.container(border=True):
+            st.markdown("**3. Barreira**")
+            st.caption("Se a rota encosta numa rua-barreira, há direito.")
+
     with st.sidebar:
-        st.subheader("Cadastro de barreiras")
+        st.markdown("**Cadastro de barreiras**")
         try:
             barreiras = barreiras_do_cadastro()
             nomes = sorted({b.nome for b in barreiras})
@@ -495,17 +512,16 @@ def pagina_principal() -> None:
             st.error(str(e))
             st.stop()
 
-        st.divider()
-        buffer_m = st.number_input(
-            "Buffer da barreira (m)",
-            min_value=1.0,
-            max_value=50.0,
-            value=BUFFER_M_PADRAO,
-            step=1.0,
-            help="Não mexa sem ter os casos conhecidos rodando. Buffer generoso demais "
-            "faz a rota encostar em via que ela não usa.",
-        )
-        st.divider()
+        with st.expander("Ajuste técnico"):
+            buffer_m = st.number_input(
+                "Buffer da barreira (m)",
+                min_value=1.0,
+                max_value=50.0,
+                value=BUFFER_M_PADRAO,
+                step=1.0,
+                help="Não mexa sem ter os casos conhecidos rodando. Buffer generoso demais "
+                "faz a rota encostar em via que ela não usa.",
+            )
         _status_integracoes()
         try:
             st.caption(f"Cadastro: {descricao_cadastro(ARQUIVO_BARREIRAS)}")
@@ -513,33 +529,37 @@ def pagina_principal() -> None:
             pass
         if usuario_e_admin():
             st.page_link("pages/1_Cadastro_de_barreiras.py", label="🛠️ Gerenciar barreiras")
-        st.divider()
         st.caption(
             "Endereços ficam na sessão do servidor até logout. "
             "Sem banco de dados nem histórico de consultas."
         )
 
-    esquerda, direita = st.columns(2)
+    esquerda, direita = st.columns(2, gap="medium")
     with esquerda:
-        casa = campo_endereco("🏠 Endereço da casa", "casa", EXEMPLO_ENDERECO_MAPS)
+        with st.container(border=True):
+            casa = campo_endereco("🏠 Endereço da casa", "casa", EXEMPLO_ENDERECO_MAPS)
     with direita:
-        escola = campo_endereco(
-            "🏫 Endereço da escola",
-            "escola",
-            "Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000",
+        with st.container(border=True):
+            escola = campo_endereco(
+                "🏫 Endereço da escola",
+                "escola",
+                "Av. Rudge, 700 - Bom Retiro, São Paulo - SP, 01133-000",
+            )
+
+    with st.container(border=True):
+        escolheu = st.checkbox(
+            "A responsável escolheu esta escola",
+            key="escolheu_escola",
+            help="Quando a escola foi escolhida pela responsável, não há direito a transporte, "
+            "independentemente do trajeto.",
         )
-
-    st.divider()
-    escolheu = st.checkbox(
-        "A responsável escolheu esta escola",
-        key="escolheu_escola",
-        help="Quando a escola foi escolhida pela responsável, não há direito a transporte, "
-        "independentemente do trajeto.",
-    )
-
-    _limpar_resultado_se_entrada_mudou(casa, escola, escolheu)
-
-    calcular = st.button("Calcular", type="primary", disabled=not (casa and escola))
+        _limpar_resultado_se_entrada_mudou(casa, escola, escolheu)
+        calcular = st.button(
+            "Calcular",
+            type="primary",
+            disabled=not (casa and escola),
+            use_container_width=True,
+        )
     if calcular and casa and escola:
         try:
             consumir_calculo()
@@ -582,22 +602,24 @@ def pagina_principal() -> None:
             st.info("Informe os dois endereços e confira o que o sistema encontrou.")
         return
 
-    mostrar_resultado(salvo["resultado"])
+    with st.container(border=True):
+        mostrar_resultado(salvo["resultado"])
     rota = salvo.get("rota")
     if rota is None:
         return
 
-    st.subheader("Trajeto")
-    st.caption(
-        "Rota em azul, barreiras em vermelho (traço grosso = tocada), "
-        "A = casa, B = escola."
-    )
-    st_folium(
-        montar_mapa(rota, salvo["casa"], salvo["escola"], salvo["atingidas"]),
-        height=520,
-        use_container_width=True,
-        returned_objects=[],
-    )
+    with st.container(border=True):
+        st.subheader("Trajeto")
+        st.caption(
+            "Rota em azul, barreiras em vermelho (traço grosso = tocada), "
+            "A = casa, B = escola."
+        )
+        st_folium(
+            montar_mapa(rota, salvo["casa"], salvo["escola"], salvo["atingidas"]),
+            height=520,
+            use_container_width=True,
+            returned_objects=[],
+        )
 
 
 def mostrar_resultado(resultado) -> None:
@@ -608,13 +630,15 @@ def mostrar_resultado(resultado) -> None:
 
     st.markdown(f"**Motivo:** {resultado.motivo}")
 
-    if resultado.distancia_m is not None:
-        st.metric("Distância a pé", f"{resultado.distancia_m:,.0f} m".replace(",", "."))
-
-    if resultado.barreiras_atingidas:
-        st.markdown("**Barreiras no caminho:**")
-        for nome in resultado.barreiras_atingidas:
-            st.markdown(f"- {nome}")
+    col_dist, col_vias = st.columns(2)
+    with col_dist:
+        if resultado.distancia_m is not None:
+            st.metric("Distância a pé", f"{resultado.distancia_m:,.0f} m".replace(",", "."))
+    with col_vias:
+        if resultado.barreiras_atingidas:
+            st.markdown("**Barreiras no caminho:**")
+            for nome in resultado.barreiras_atingidas:
+                st.markdown(f"- {nome}")
 
 
 def main() -> None:

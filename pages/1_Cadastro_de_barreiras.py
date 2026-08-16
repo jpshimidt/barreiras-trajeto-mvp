@@ -28,6 +28,7 @@ from core.barreiras_osm import (
 from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
 from core.rate_limit import consumir_busca_barreira_osm
+from core.ui import aplicar_estilo, marca
 
 ARQUIVO_BARREIRAS = Path(__file__).resolve().parent.parent / "dados" / "barreiras.geojson"
 COR_BARREIRA = "#d1242f"
@@ -36,6 +37,7 @@ TIPOS_FORM = [t for t in TIPOS_BARREIRA if t != "(sem tipo)"]
 st.set_page_config(page_title="Cadastro de barreiras", page_icon="🛠️", layout="wide")
 
 exigir_admin()
+aplicar_estilo()
 
 
 @st.cache_resource(show_spinner=False)
@@ -578,14 +580,17 @@ def _secao_formulario() -> None:
 
 store = _store()
 
+st.page_link("app.py", label="← Consulta de elegibilidade")
+marca()
 st.title("🛠️ Cadastro de barreiras")
 st.caption(
     "Cadastre ou edite ruas-barreira. Traçado **a pé** pelo eixo da via. "
     "No mapa: dê zoom, clique perto da rua (o ponto gruda no asfalto) e troque para satélite se precisar."
 )
-st.info(f"Armazenamento: **{descricao_store(store)}**")
+st.caption(f"Armazenamento: **{descricao_store(store)}**")
 
-_secao_formulario()
+with st.container(border=True):
+    _secao_formulario()
 
 st.divider()
 
@@ -595,16 +600,37 @@ except ErroExterno as e:
     st.error(str(e))
     st.stop()
 
-st.subheader(f"{len(barreiras)} trechos cadastrados")
-for barreira in sorted(barreiras, key=lambda b: b.rotulo):
+cab_lista, busca_lista = st.columns([2, 2])
+with cab_lista:
+    st.subheader(f"{len(barreiras)} trechos cadastrados")
+with busca_lista:
+    filtro = st.text_input(
+        "Filtrar lista",
+        key="lista_busca_barreira",
+        placeholder="Nome da via…",
+        label_visibility="collapsed",
+    )
+
+visiveis = [
+    b
+    for b in sorted(barreiras, key=lambda x: x.rotulo)
+    if not filtro.strip() or filtro.lower() in b.rotulo.lower()
+]
+if filtro.strip() and not visiveis:
+    st.info("Nenhum trecho com esse nome.")
+
+for barreira in visiveis:
     with st.expander(barreira.rotulo):
-        st.caption(f"ID: `{barreira.id}` · tipo: {barreira.tipo}")
-        if barreira.numero_inicio or barreira.numero_fim:
-            st.caption(
-                f"Faixa: nº {barreira.numero_inicio or '…'} – {barreira.numero_fim or '…'}"
-                f"{f' ({barreira.paridade})' if barreira.paridade else ''}"
-            )
-        st.caption(f"Comprimento: ~{comprimento_m(barreira):.0f} m")
+        meta1, meta2 = st.columns(2)
+        with meta1:
+            st.caption(f"ID: `{barreira.id}` · tipo: {barreira.tipo}")
+            if barreira.numero_inicio or barreira.numero_fim:
+                st.caption(
+                    f"Faixa: nº {barreira.numero_inicio or '…'} – {barreira.numero_fim or '…'}"
+                    f"{f' ({barreira.paridade})' if barreira.paridade else ''}"
+                )
+        with meta2:
+            st.caption(f"Comprimento: ~{comprimento_m(barreira):.0f} m")
         st_folium(_mapa_preview([barreira]), width=None, height=260, key=f"mapa_{barreira.id}")
         col_ed, col_rm = st.columns(2)
         with col_ed:
