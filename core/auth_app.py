@@ -11,7 +11,7 @@ import streamlit_authenticator as stauth
 from core.rate_limit import registrar_tentativa_login_falha
 from core.seguranca import cookie_key_segura, senha_parece_hash
 from core.sessao_privada import limpar_dados_pessoais_sessao
-from core.ui import aplicar_estilo, marca
+from core.ui import aplicar_estilo, painel_login, sidebar_marca
 
 
 def _to_plain_dict(valor: Any) -> Any:
@@ -172,9 +172,10 @@ def exigir_login() -> bool:
     if st.session_state.get("authentication_status"):
         authenticator.login(location="unrendered", key="login_form", fields=campos_login)
     else:
-        _coluna_esq, centro, _coluna_dir = st.columns([0.85, 1.3, 0.85])
+        arte, centro = st.columns([1.05, 1], gap="large")
+        with arte:
+            painel_login()
         with centro:
-            marca()
             st.title("Entrar")
             st.caption(
                 "Consulta de elegibilidade ao transporte escolar no município de São Paulo."
@@ -211,7 +212,7 @@ def exigir_login() -> bool:
 
     if autenticado_agora:
         with st.sidebar:
-            marca()
+            sidebar_marca()
             st.caption(f"Olá, **{st.session_state.get('name', '')}**")
             authenticator.logout(location="sidebar", key="logout_btn")
         return True

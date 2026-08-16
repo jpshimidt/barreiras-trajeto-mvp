@@ -42,7 +42,7 @@ from core.google_geo import (
     ler_google_api_key,
 )
 from core.routing import Rota, rota_a_pe
-from core.ui import aplicar_estilo, marca
+from core.ui import aplicar_estilo, chips_mapa, lead, marca, passos_consulta, sidebar_marca, veredito
 
 ARQUIVO_BARREIRAS = Path(__file__).parent / "dados" / "barreiras.geojson"
 
@@ -473,28 +473,15 @@ def campo_endereco(rotulo: str, chave: str, exemplo: str) -> Local | None:
 def pagina_principal() -> None:
     aplicar_estilo()
     marca()
-    st.title("🚌 Elegibilidade a transporte escolar")
-    st.caption(
-        "Município de São Paulo. Digite o endereço, busque sugestões ou cole como no Maps. "
+    st.title("Elegibilidade a transporte escolar")
+    lead(
         "A criança tem direito quando o menor caminho a pé até a escola encosta "
         "em alguma rua cadastrada como barreira. A rota é sempre a pé, nunca GPS de carro."
     )
-
-    guia1, guia2, guia3 = st.columns(3)
-    with guia1:
-        with st.container(border=True):
-            st.markdown("**1. Endereços**")
-            st.caption("Casa e escola em São Paulo, como no Maps.")
-    with guia2:
-        with st.container(border=True):
-            st.markdown("**2. Caminho a pé**")
-            st.caption("O menor trajeto a pé — nunca GPS de carro.")
-    with guia3:
-        with st.container(border=True):
-            st.markdown("**3. Barreira**")
-            st.caption("Se a rota encosta numa rua-barreira, há direito.")
+    passos_consulta()
 
     with st.sidebar:
+        sidebar_marca()
         st.markdown("**Cadastro de barreiras**")
         try:
             barreiras = barreiras_do_cadastro()
@@ -602,18 +589,14 @@ def pagina_principal() -> None:
             st.info("Informe os dois endereços e confira o que o sistema encontrou.")
         return
 
-    with st.container(border=True):
-        mostrar_resultado(salvo["resultado"])
+    mostrar_resultado(salvo["resultado"])
     rota = salvo.get("rota")
     if rota is None:
         return
 
     with st.container(border=True):
         st.subheader("Trajeto")
-        st.caption(
-            "Rota em azul, barreiras em vermelho (traço grosso = tocada), "
-            "A = casa, B = escola."
-        )
+        chips_mapa()
         st_folium(
             montar_mapa(rota, salvo["casa"], salvo["escola"], salvo["atingidas"]),
             height=520,
@@ -623,11 +606,7 @@ def pagina_principal() -> None:
 
 
 def mostrar_resultado(resultado) -> None:
-    if resultado.tem_direito:
-        st.success("## ✅ COM DIREITO")
-    else:
-        st.error("## ❌ SEM DIREITO")
-
+    veredito(resultado)
     st.markdown(f"**Motivo:** {resultado.motivo}")
 
     col_dist, col_vias = st.columns(2)
