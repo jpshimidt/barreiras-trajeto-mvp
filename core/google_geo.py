@@ -299,33 +299,63 @@ def extrair_nome_de_url_maps(url: str) -> str | None:
     return None
 
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 def extrair_coordenadas_maps_url(url: str) -> tuple[float, float] | None:
     """Extrai lat/lon de links compartilhados do Google Maps."""
-    match = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", url)
-    if match:
-        return float(match.group(1)), float(match.group(2))
+    # Pino do lugar (mais fiel que o centro do mapa).
     match = re.search(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)", url)
     if match:
         return float(match.group(1)), float(match.group(2))
-    match = re.search(r"[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)", url)
+    # Link curto expandido: /maps/search/-23.48,+-46.60
+    match = re.search(r"/search/(-?\d+\.\d+)\s*,\s*\+?(-?\d+\.\d+)", url)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    match = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", url)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    match = re.search(r"[?&]q=(-?\d+\.\d+)\s*,\s*\+?(-?\d+\.\d+)", url)
     if match:
         return float(match.group(1)), float(match.group(2))
     return None
 
 
-def resolver_link_maps(url: str, sessao: requests.Session | None = None) -> str:
-    """Segue redirecionamentos de links curtos (maps.app.goo.gl)."""
+def expandir_urls_maps(url: str, sessao: requests.Session | None = None) -> list[str]:
+    """URL original + redirecionamentos (maps.app.goo.gl → /maps/search/lat,lon)."""
+    vistos: list[str] = [url]
     sessao = sessao or requests.Session()
     try:
         resp = sessao.get(
             url,
             allow_redirects=True,
             timeout=TIMEOUT_S,
-            headers={"User-Agent": "barreiras-trajeto-mvp/0.1 (cadastro de barreiras)"},
+            headers={"User-Agent": _BROWSER_UA},
         )
-        return str(resp.url or url)
+        for hist in getattr(resp, "history", None) or []:
+            loc = (getattr(hist, "headers", None) or {}).get("Location")
+            if loc:
+                vistos.append(loc)
+            if getattr(hist, "url", None):
+                vistos.append(str(hist.url))
+        if getattr(resp, "url", None):
+            vistos.append(str(resp.url))
     except requests.RequestException:
-        return url
+        pass
+    unicos: list[str] = []
+    for item in vistos:
+        if item not in unicos:
+            unicos.append(item)
+    return unicos
+
+
+def resolver_link_maps(url: str, sessao: requests.Session | None = None) -> str:
+    """Segue redirecionamentos de links curtos (maps.app.goo.gl)."""
+    urls = expandir_urls_maps(url, sessao)
+    return urls[-1] if urls else url
 
 
 def geocode_reverso(lat: float, lon: float, api_key: str) -> str | None:
@@ -396,10 +426,11 @@ def pin_de_link_maps(
     coords = extrair_coordenadas_maps_url(url)
     if coords:
         return coords
-    final = resolver_link_maps(url, sessao)
-    coords = extrair_coordenadas_maps_url(final)
-    if coords:
-        return coords
+    for candidato in expandir_urls_maps(url, sessao):
+        coords = extrair_coordenadas_maps_url(candidato)
+        if coords:
+            return coords
+    final = expandir_urls_maps(url, sessao)[-1]
     nome = extrair_nome_de_url_maps(final) or extrair_nome_de_url_maps(url)
     api_key = ler_google_api_key()
     if nome and api_key:

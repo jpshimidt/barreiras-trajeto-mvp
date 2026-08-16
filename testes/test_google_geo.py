@@ -23,6 +23,12 @@ def test_extrair_coordenadas_de_link_maps():
     assert round(lon, 6) == -46.600658
 
 
+def test_extrair_coordenadas_de_search_googl():
+    url = "https://www.google.com/maps/search/-23.481207,+-46.601488?entry=tts"
+    coords = extrair_coordenadas_maps_url(url)
+    assert coords == (-23.481207, -46.601488)
+
+
 def test_parece_link_maps():
     assert parece_link_maps("https://maps.app.goo.gl/abc123")
     assert parece_link_maps(
@@ -45,6 +51,20 @@ def test_endereco_de_link_maps_sem_rede():
         "+S%C3%A3o+Paulo+-+SP/@-23.478,-46.608,17z"
     )
     assert "Cruz de Malta" in endereco_de_link_maps(url)
+
+
+def test_pin_de_link_curto_via_search_redirect(monkeypatch):
+    from core.google_geo import pin_de_link_maps
+
+    monkeypatch.setattr(
+        "core.google_geo.expandir_urls_maps",
+        lambda url, sessao=None: [
+            url,
+            "https://www.google.com/maps/search/-23.481207,+-46.601488?entry=tts",
+        ],
+    )
+    lat, lon = pin_de_link_maps("https://maps.app.goo.gl/NZuz9m4xSJcTZSfi8")
+    assert (lat, lon) == (-23.481207, -46.601488)
 
 
 def test_pin_de_link_maps_usa_coordenadas_do_url():
