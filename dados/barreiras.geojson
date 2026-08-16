@@ -41,36 +41,6 @@
     "origem": "app",
     "atualizado_em": "2026-08-16"
    }
-  },
-  {
-   "type": "Feature",
-   "geometry": {
-    "type": "LineString",
-    "coordinates": [
-     [
-      -46.69,
-      -23.496
-     ],
-     [
-      -46.7,
-      -23.493
-     ],
-     [
-      -46.71,
-      -23.4905
-     ]
-    ]
-   },
-   "properties": {
-    "id": "inajar-de-souza-100-2500-teste",
-    "nome": "Avenida Inajar de Souza",
-    "tipo": "avenida",
-    "municipio": "São Paulo",
-    "origem": "app",
-    "atualizado_em": "2026-08-16",
-    "numero_inicio": 100,
-    "numero_fim": 2500
-   }
   }
  ]
 }
