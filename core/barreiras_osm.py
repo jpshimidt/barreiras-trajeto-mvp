@@ -766,6 +766,52 @@ def eixo_snap_roads(
     return coords if len(coords) >= 2 else []
 
 
+def colar_clique_na_via(
+    lat: float,
+    lon: float,
+    api_key: str | None = None,
+    *,
+    raio_m: float = 80,
+) -> tuple[float, float]:
+    """
+    Gruda o clique no asfalto mais perto (Google Nearest Roads).
+
+    Se a API falhar ou o asfalto estiver longe demais, devolve o clique original.
+    """
+    from shapely.geometry import Point
+
+    from core.geo import crs_utm_local, para_metrico
+    from core.google_geo import ler_google_api_key
+
+    api_key = api_key or ler_google_api_key()
+    if not api_key:
+        return (lat, lon)
+    try:
+        resp = requests.get(
+            "https://roads.googleapis.com/v1/nearestRoads",
+            params={"points": f"{lat},{lon}", "key": api_key},
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException:
+        return (lat, lon)
+    if resp.status_code != 200:
+        return (lat, lon)
+    pontos = (resp.json() or {}).get("snappedPoints") or []
+    if not pontos:
+        return (lat, lon)
+    loc = pontos[0].get("location") or {}
+    if loc.get("latitude") is None or loc.get("longitude") is None:
+        return (lat, lon)
+    snap = (float(loc["latitude"]), float(loc["longitude"]))
+    crs = crs_utm_local(lon, lat)
+    dist = para_metrico(Point(lon, lat), crs).distance(
+        para_metrico(Point(snap[1], snap[0]), crs)
+    )
+    if dist > raio_m:
+        return (lat, lon)
+    return snap
+
+
 def coords_eixo_entre_pinos(
     nome: str,
     origem: tuple[float, float],
