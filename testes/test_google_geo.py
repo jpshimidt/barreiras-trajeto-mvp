@@ -47,6 +47,15 @@ def test_endereco_de_link_maps_sem_rede():
     assert "Cruz de Malta" in endereco_de_link_maps(url)
 
 
+def test_pin_de_link_maps_usa_coordenadas_do_url():
+    from core.google_geo import pin_de_link_maps
+
+    url = "https://www.google.com/maps/place/R.+Cruz+de+Malta/@-23.478123,-46.608456,17z"
+    lat, lon = pin_de_link_maps(url)
+    assert round(lat, 6) == -23.478123
+    assert round(lon, 6) == -46.608456
+
+
 def test_endereco_de_link_curto_segue_redirect(monkeypatch):
     class Resp:
         url = (

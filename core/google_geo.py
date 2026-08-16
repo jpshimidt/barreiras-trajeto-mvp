@@ -355,6 +355,63 @@ def geocode_reverso(lat: float, lon: float, api_key: str) -> str | None:
     return None
 
 
+def geocode_ponto(consulta: str, api_key: str) -> tuple[float, float] | None:
+    """Primeiro ponto do Geocoding legado para um texto livre."""
+    try:
+        resp = requests.get(
+            GEOCODE_URL,
+            params={
+                "address": consulta,
+                "key": api_key,
+                "components": "country:BR|administrative_area:SP|locality:São Paulo",
+                "language": "pt-BR",
+            },
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    dados = resp.json()
+    if dados.get("status") != "OK":
+        return None
+    loc = ((dados.get("results") or [{}])[0].get("geometry") or {}).get("location") or {}
+    if loc.get("lat") is None or loc.get("lng") is None:
+        return None
+    return float(loc["lat"]), float(loc["lng"])
+
+
+def pin_de_link_maps(
+    url: str, sessao: requests.Session | None = None
+) -> tuple[float, float]:
+    """
+    Pino (lat, lon) de um link do Maps.
+
+    Usa coordenadas do próprio URL; se for link curto, segue o redirect;
+    se só houver nome do lugar, geocodifica.
+    """
+    url = url.strip()
+    if not url:
+        raise ErroExterno("Cole o link do Google Maps.")
+    coords = extrair_coordenadas_maps_url(url)
+    if coords:
+        return coords
+    final = resolver_link_maps(url, sessao)
+    coords = extrair_coordenadas_maps_url(final)
+    if coords:
+        return coords
+    nome = extrair_nome_de_url_maps(final) or extrair_nome_de_url_maps(url)
+    api_key = ler_google_api_key()
+    if nome and api_key:
+        ponto = geocode_ponto(nome, api_key)
+        if ponto:
+            return ponto
+    raise ErroExterno(
+        "Não achei um ponto neste link do Google Maps. "
+        "Abra o lugar, copie o link compartilhado e cole de novo."
+    )
+
+
 def endereco_de_link_maps(url: str, sessao: requests.Session | None = None) -> str:
     """
     Converte link do Google Maps em endereço/nome de rua.
