@@ -719,6 +719,166 @@ def directions_entre_pontos(
     return _coords_de_geometria_nominatim(geom) or []
 
 
+def nucleo_nome_via(nome: str) -> str:
+    """Rua Cruz de Malta → Cruz de Malta (para regex OSM)."""
+    texto = expandir_abrev_via(nome).strip()
+    return re.sub(
+        r"^(rua|avenida|alameda|travessa|praca|praça|rodovia)\s+",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    ).strip() or texto
+
+
+def bbox_pinos(
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+    *,
+    pad: float = 0.003,
+) -> tuple[float, float, float, float]:
+    """south, west, north, east."""
+    lats = [origem[0], destino[0]]
+    lons = [origem[1], destino[1]]
+    return min(lats) - pad, min(lons) - pad, max(lats) + pad, max(lons) + pad
+
+
+def montar_consulta_bbox(nome: str, south: float, west: float, north: float, east: float) -> str:
+    nucleo = nucleo_nome_via(nome).replace('"', '\\"')
+    return (
+        f"[out:json][timeout:{TIMEOUT_OVERPASS_S}];\n"
+        f'way["highway"]["name"~"{nucleo}",i]({south},{west},{north},{east});\n'
+        f"out geom;\n"
+    )
+
+
+def fundir_ways(resposta: dict):
+    from shapely.ops import linemerge, unary_union
+
+    linhas = []
+    for el in resposta.get("elements") or []:
+        if el.get("type") != "way":
+            continue
+        geom = el.get("geometry") or []
+        if len(geom) < 2:
+            continue
+        linhas.append(LineString([(p["lon"], p["lat"]) for p in geom]))
+    if not linhas:
+        return None
+    if len(linhas) == 1:
+        return linhas[0]
+    return linemerge(unary_union(linhas))
+
+
+def recortar_linha_entre_pinos(
+    linha,
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+):
+    """Recorta o eixo da via entre dois pinos (lat, lon)."""
+    from shapely.geometry import Point
+    from shapely.ops import substring
+
+    if linha is None or linha.is_empty:
+        return None
+    p1 = Point(origem[1], origem[0])
+    p2 = Point(destino[1], destino[0])
+    if linha.geom_type == "MultiLineString":
+        linha = min(linha.geoms, key=lambda g: g.distance(p1) + g.distance(p2))
+    if linha.geom_type != "LineString" or linha.length == 0:
+        return None
+    f1 = linha.project(p1, normalized=True)
+    f2 = linha.project(p2, normalized=True)
+    if abs(f1 - f2) < 1e-5:
+        return None
+    if f1 > f2:
+        f1, f2 = f2, f1
+    recorte = substring(linha, f1, f2, normalized=True)
+    if recorte is None or recorte.is_empty or recorte.geom_type != "LineString":
+        return None
+    if len(recorte.coords) < 2:
+        return None
+    return recorte
+
+
+def eixo_osm_entre_pinos(
+    nome: str,
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+    sessao: requests.Session | None = None,
+):
+    """Eixo OSM da via no retângulo dos dois pinos, recortado entre eles."""
+    sessao = sessao or requests.Session()
+    south, west, north, east = bbox_pinos(origem, destino)
+    consulta = montar_consulta_bbox(nome, south, west, north, east)
+    resposta = consultar_overpass(sessao, consulta)
+    fundida = fundir_ways(resposta)
+    return recortar_linha_entre_pinos(fundida, origem, destino)
+
+
+def eixo_snap_roads(
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+    api_key: str,
+    *,
+    amostras: int = 20,
+) -> list[tuple[float, float]]:
+    """Interpola a reta entre os pinos e cola no asfalto (Google Roads)."""
+    if amostras < 2:
+        amostras = 2
+    path = []
+    for i in range(amostras):
+        t = i / (amostras - 1)
+        lat = origem[0] + t * (destino[0] - origem[0])
+        lon = origem[1] + t * (destino[1] - origem[1])
+        path.append(f"{lat},{lon}")
+    try:
+        resp = requests.get(
+            "https://roads.googleapis.com/v1/snapToRoads",
+            params={"path": "|".join(path), "interpolate": "true", "key": api_key},
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException:
+        return []
+    if resp.status_code != 200:
+        return []
+    snapped = (resp.json() or {}).get("snappedPoints") or []
+    coords = []
+    for p in snapped:
+        loc = p.get("location") or {}
+        if loc.get("latitude") is None or loc.get("longitude") is None:
+            continue
+        coords.append((float(loc["longitude"]), float(loc["latitude"])))
+    return coords if len(coords) >= 2 else []
+
+
+def coords_eixo_entre_pinos(
+    nome: str,
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+    api_key: str | None = None,
+) -> tuple[list[tuple[float, float]], str]:
+    """
+    Eixo da via entre dois pinos — não é rota de carro.
+
+    1. OSM (nome da rua no retângulo dos pinos)
+    2. Google Roads (cola a reta no asfalto)
+    3. Reta entre os pinos
+    """
+    try:
+        recorte = eixo_osm_entre_pinos(nome, origem, destino)
+        if recorte is not None:
+            return list(recorte.coords), "osm-eixo"
+    except (OverpassIndisponivel, ErroExterno, requests.RequestException):
+        pass
+
+    if api_key:
+        snapped = eixo_snap_roads(origem, destino, api_key)
+        if snapped:
+            return snapped, "google-roads"
+
+    return [(origem[1], origem[0]), (destino[1], destino[0])], "eixo-reto"
+
+
 def buscar_features_google_rota(
     nome: str,
     trecho: RegistroTrecho | None = None,
@@ -754,16 +914,16 @@ def buscar_barreira_entre_pontos(
     numero_fim: int | None = None,
     paridade: str | None = None,
 ) -> list[Barreira]:
-    """Traça a barreira pelo caminho de carro entre dois cliques no mapa."""
+    """Traça a barreira pelo eixo da via entre dois pinos — não é rota de carro."""
     from core.google_geo import ler_google_api_key
 
     nome = expandir_abrev_via(nome_via_de_entrada(nome) or nome)
     if not nome:
         raise ErroExterno("Informe o nome da rua para o trecho desenhado.")
     api_key = ler_google_api_key()
-    coords = directions_entre_pontos(origem, destino, api_key)
+    coords, origem_geom = coords_eixo_entre_pinos(nome, origem, destino, api_key)
     tipo_via = _normalizar_tipo(tipo) or "rua"
-    feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
+    feature = feature_de_linha(coords, nome, origem=origem_geom, tipo=tipo_via)
     if not feature:
         raise ErroExterno("O Google não devolveu um traçado entre os dois pontos.")
     barreiras = _features_para_barreiras([feature])

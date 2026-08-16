@@ -126,8 +126,8 @@ def _secao_formulario() -> None:
     else:
         st.subheader("Nova barreira")
         st.caption(
-            "O jeito mais fiel: cole o link do **início** e do **fim** da rua no Google Maps. "
-            "O sistema traça o caminho entre os dois pins. Confira no mapa antes de salvar."
+            "Cole o link do **início** e do **fim** da rua (vale `maps.app.goo.gl`). "
+            "O traçado segue o **eixo da via**, não a rota de carro. Confira no mapa antes de salvar."
         )
 
     st.session_state.setdefault("form_paridade", "ambos")

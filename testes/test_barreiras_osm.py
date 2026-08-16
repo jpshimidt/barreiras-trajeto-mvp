@@ -14,10 +14,13 @@ from core.barreiras_osm import (
     buscar_barreiras_rua,
     comprimento_m,
     consultar_overpass,
+    coords_eixo_entre_pinos,
     decodificar_polyline,
     feature_de_way,
     nome_via_de_entrada,
+    nucleo_nome_via,
     overpass_para_geojson,
+    recortar_linha_entre_pinos,
 )
 from core.erros import ErroExterno
 from core.recorte_trecho import RegistroTrecho
@@ -280,8 +283,11 @@ def test_buscar_barreiras_aplica_faixa_e_paridade(monkeypatch):
 
 def test_buscar_barreira_entre_pontos(monkeypatch):
     monkeypatch.setattr(
-        "core.barreiras_osm.directions_entre_pontos",
-        lambda origem, destino, api_key=None: [(-46.60, -23.48), (-46.59, -23.48)],
+        "core.barreiras_osm.coords_eixo_entre_pinos",
+        lambda nome, origem, destino, api_key=None: (
+            [(-46.60, -23.48), (-46.59, -23.48)],
+            "osm-eixo",
+        ),
     )
     monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
     barreiras = buscar_barreira_entre_pontos(
@@ -302,8 +308,11 @@ def test_buscar_barreira_entre_links(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "core.barreiras_osm.directions_entre_pontos",
-        lambda origem, destino, api_key=None: [(-46.610, -23.480), (-46.606, -23.476)],
+        "core.barreiras_osm.coords_eixo_entre_pinos",
+        lambda nome, origem, destino, api_key=None: (
+            [(-46.610, -23.480), (-46.606, -23.476)],
+            "osm-eixo",
+        ),
     )
     monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
     barreiras = buscar_barreira_entre_links(
@@ -345,6 +354,34 @@ def test_aplicar_metadados_e_comprimento():
     assert barreira.numero_inicio == 10
     assert barreira.paridade is None
     assert comprimento_m(barreira) > 50
+
+
+def test_nucleo_nome_via():
+    assert nucleo_nome_via("Rua Cruz de Malta") == "Cruz de Malta"
+    assert nucleo_nome_via("R. Cruz de Malta") == "Cruz de Malta"
+
+
+def test_recortar_linha_entre_pinos():
+    from shapely.geometry import LineString
+
+    linha = LineString([(-46.6015, -23.4812), (-46.6005, -23.4860), (-46.5992, -23.4916)])
+    recorte = recortar_linha_entre_pinos(linha, (-23.4812, -46.6015), (-23.4916, -46.5992))
+    assert recorte is not None
+    assert recorte.length > 0
+
+
+def test_coords_eixo_cai_na_reta_se_osm_e_roads_falham(monkeypatch):
+    monkeypatch.setattr(
+        "core.barreiras_osm.eixo_osm_entre_pinos",
+        lambda *a, **k: (_ for _ in ()).throw(OverpassIndisponivel("off")),
+    )
+    monkeypatch.setattr("core.barreiras_osm.eixo_snap_roads", lambda *a, **k: [])
+    coords, origem = coords_eixo_entre_pinos(
+        "Rua Cruz de Malta", (-23.481, -46.601), (-23.491, -46.599), api_key="x"
+    )
+    assert origem == "eixo-reto"
+    assert coords[0] == (-46.601, -23.481)
+    assert coords[-1] == (-46.599, -23.491)
 
 
 def test_filtrar_barreiras_perto_descarta_homonima():
