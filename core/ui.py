@@ -48,7 +48,7 @@ html, body, [class*="css"] {
 [data-testid="stAppViewContainer"] .main .block-container {
   padding-top: 1.15rem;
   padding-bottom: 4rem;
-  max-width: 1120px;
+  max-width: 1320px;
 }
 
 [data-testid="stSidebar"] {

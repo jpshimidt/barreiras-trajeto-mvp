@@ -28,6 +28,7 @@ from core.erros import ErroExterno
 from core.geo_limites import exigir_coordenada_em_sao_paulo
 from core.auth_app import exigir_login, usuario_e_admin
 from core.rate_limit import consumir_calculo, consumir_geocodificacao
+from core.sessao_privada import limpar_dados_pessoais_sessao
 from core.endereco_maps import (
     EXEMPLO_ENDERECO_MAPS,
     Local,
@@ -135,7 +136,7 @@ def montar_mapa(rota: Rota, casa: Local, escola: Local, atingidas: list[Barreira
     ).add_to(mapa)
 
     minx, miny, maxx, maxy = rota.linha.bounds
-    mapa.fit_bounds([(miny, minx), (maxy, maxx)], padding=(30, 30))
+    mapa.fit_bounds([(miny, minx), (maxy, maxx)], padding=(48, 48))
     return mapa
 
 
@@ -541,12 +542,23 @@ def pagina_principal() -> None:
             "independentemente do trajeto.",
         )
         _limpar_resultado_se_entrada_mudou(casa, escola, escolheu)
-        calcular = st.button(
-            "Calcular",
-            type="primary",
-            disabled=not (casa and escola),
-            use_container_width=True,
-        )
+        col_calc, col_nova = st.columns([3, 1], gap="small")
+        with col_calc:
+            calcular = st.button(
+                "Calcular",
+                type="primary",
+                disabled=not (casa and escola),
+                use_container_width=True,
+            )
+        with col_nova:
+            if st.button(
+                "Nova consulta",
+                key="nova_consulta",
+                use_container_width=True,
+                help="Apaga casa, escola, resultado e mapa para consultar outro aluno.",
+            ):
+                limpar_dados_pessoais_sessao()
+                st.rerun()
     if calcular and casa and escola:
         try:
             consumir_calculo()
@@ -599,7 +611,7 @@ def pagina_principal() -> None:
         chips_mapa()
         st_folium(
             montar_mapa(rota, salvo["casa"], salvo["escola"], salvo["atingidas"]),
-            height=520,
+            height=720,
             use_container_width=True,
             returned_objects=[],
         )

@@ -479,7 +479,7 @@ def _secao_formulario() -> None:
     mapa_out = st_folium(
         _mapa_preview(preview, detalhado=True),
         key=chave_mapa,
-        height=580,
+        height=720,
         use_container_width=True,
         returned_objects=["last_clicked"],
         feature_group_to_add=grupo,
