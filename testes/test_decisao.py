@@ -681,6 +681,13 @@ def test_candidato_unico_nunca_e_ambiguo():
 # --------------------------------------------------------------------------- #
 
 
+def test_ors_usa_perfil_a_pe_nunca_carro():
+    from core.routing import URL
+
+    assert "foot-walking" in URL
+    assert "driving" not in URL
+
+
 def test_le_a_rota_da_resposta_do_ors():
     resposta = {
         "features": [

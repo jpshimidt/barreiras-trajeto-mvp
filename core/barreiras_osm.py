@@ -39,7 +39,6 @@ RELACAO_SP_PADRAO = 298285
 TIMEOUT_CONSULTA_S = (8, 45)
 TIMEOUT_OVERPASS_S = 40
 TENTATIVAS = 2
-DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 
 class OverpassIndisponivel(ErroExterno):
     """Nenhum mirror Overpass respondeu — o chamador pode usar Nominatim."""
@@ -528,29 +527,6 @@ def buscar_features_nominatim(
     return features
 
 
-def decodificar_polyline(encoded: str) -> list[tuple[float, float]]:
-    """Polyline do Google Directions → [(lon, lat), ...]."""
-    coords: list[tuple[float, float]] = []
-    index = lat = lng = 0
-    while index < len(encoded):
-        for eixo in ("lat", "lng"):
-            shift = result = 0
-            while True:
-                byte = ord(encoded[index]) - 63
-                index += 1
-                result |= (byte & 0x1F) << shift
-                shift += 5
-                if byte < 0x20:
-                    break
-            delta = ~(result >> 1) if result & 1 else (result >> 1)
-            if eixo == "lat":
-                lat += delta
-            else:
-                lng += delta
-        coords.append((lng / 1e5, lat / 1e5))
-    return coords
-
-
 def feature_de_linha(
     coords: list[tuple[float, float]],
     nome: str,
@@ -656,67 +632,6 @@ def _pontos_google_para_rota(
         if extremos:
             return extremos
     return None
-
-
-def directions_entre_pontos(
-    origem: tuple[float, float],
-    destino: tuple[float, float],
-    api_key: str | None = None,
-) -> list[tuple[float, float]]:
-    """Caminho entre dois (lat, lon) → coordenadas (lon, lat). Google, depois ORS."""
-    if api_key:
-        try:
-            resp = requests.get(
-                DIRECTIONS_URL,
-                params={
-                    "origin": f"{origem[0]},{origem[1]}",
-                    "destination": f"{destino[0]},{destino[1]}",
-                    "mode": "driving",
-                    "region": "br",
-                    "language": "pt-BR",
-                    "key": api_key,
-                },
-                timeout=TIMEOUT_S,
-            )
-        except requests.RequestException:
-            resp = None
-        if resp is not None and resp.status_code == 200:
-            dados = resp.json()
-            if dados.get("status") == "OK":
-                rotas = dados.get("routes") or []
-                encoded = ((rotas[0].get("overview_polyline") or {}).get("points")) if rotas else ""
-                coords = decodificar_polyline(encoded or "")
-                if len(coords) >= 2:
-                    return coords
-
-    from core.ors import ler_api_key
-
-    try:
-        ors_key = ler_api_key()
-    except ErroExterno:
-        ors_key = None
-    if not ors_key:
-        raise ErroExterno(
-            "Não foi possível traçar a via. "
-            "Ative a Directions API no Google Cloud ou confira a chave ORS_API_KEY."
-        )
-    corpo = {"coordinates": [[origem[1], origem[0]], [destino[1], destino[0]]]}
-    try:
-        resp = requests.post(
-            "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
-            json=corpo,
-            headers={"Authorization": ors_key, "Content-Type": "application/json"},
-            timeout=TIMEOUT_S,
-        )
-    except requests.RequestException as e:
-        raise ErroExterno(f"Roteamento falhou na rede: {e}") from e
-    if resp.status_code != 200:
-        raise ErroExterno(f"OpenRouteService respondeu HTTP {resp.status_code}")
-    features = resp.json().get("features") or []
-    if not features:
-        return []
-    geom = features[0].get("geometry") or {}
-    return _coords_de_geometria_nominatim(geom) or []
 
 
 def nucleo_nome_via(nome: str) -> str:
@@ -858,10 +773,11 @@ def coords_eixo_entre_pinos(
     api_key: str | None = None,
 ) -> tuple[list[tuple[float, float]], str]:
     """
-    Eixo da via entre dois pinos — não é rota de carro.
+    Eixo da via como um pedestre caminha — nunca GPS de carro
+    (sentido único, viaduto, atalho em rua paralela).
 
     1. OSM (nome da rua no retângulo dos pinos)
-    2. Google Roads (cola a reta no asfalto)
+    2. Google Roads (cola a reta no asfalto da própria via)
     3. Reta entre os pinos
     """
     try:
@@ -885,7 +801,7 @@ def buscar_features_google_rota(
     tipo: str | None = None,
     entrada: str | None = None,
 ) -> list[dict]:
-    """Traçado da via via Google Geocoding + Directions (funciona no Streamlit Cloud)."""
+    """Traçado da via pelo eixo a pé, a partir do endereço/nome — nunca Directions de carro."""
     from core.google_geo import ler_google_api_key
 
     api_key = ler_google_api_key()
@@ -895,12 +811,9 @@ def buscar_features_google_rota(
     extremos = _pontos_google_para_rota(api_key, nome, trecho, entrada=entrada)
     if not extremos:
         return []
-    try:
-        coords = directions_entre_pontos(extremos[0], extremos[1], api_key)
-    except ErroExterno:
-        return []
+    coords, origem_geom = coords_eixo_entre_pinos(nome, extremos[0], extremos[1], api_key)
     tipo_via = _normalizar_tipo(tipo) or "rua"
-    feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
+    feature = feature_de_linha(coords, nome, origem=origem_geom, tipo=tipo_via)
     return [feature] if feature else []
 
 
@@ -914,7 +827,7 @@ def buscar_barreira_entre_pontos(
     numero_fim: int | None = None,
     paridade: str | None = None,
 ) -> list[Barreira]:
-    """Traça a barreira pelo eixo da via entre dois pinos — não é rota de carro."""
+    """Traça a barreira pelo eixo da via a pé entre dois pinos — nunca GPS de carro."""
     from core.google_geo import ler_google_api_key
 
     nome = expandir_abrev_via(nome_via_de_entrada(nome) or nome)
@@ -925,7 +838,7 @@ def buscar_barreira_entre_pontos(
     tipo_via = _normalizar_tipo(tipo) or "rua"
     feature = feature_de_linha(coords, nome, origem=origem_geom, tipo=tipo_via)
     if not feature:
-        raise ErroExterno("O Google não devolveu um traçado entre os dois pontos.")
+        raise ErroExterno("Não deu para traçar o eixo da via entre os dois pontos.")
     barreiras = _features_para_barreiras([feature])
     for barreira in barreiras:
         if numero_inicio:
@@ -935,6 +848,117 @@ def buscar_barreira_entre_pontos(
         if paridade:
             barreira.paridade = paridade
     return barreiras
+
+
+def extremos_latlon(geometria) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Primeiro e último ponto (lat, lon) de LineString ou MultiLineString."""
+    if geometria is None or geometria.is_empty:
+        return None
+    if geometria.geom_type == "MultiLineString":
+        geoms = [g for g in geometria.geoms if g.geom_type == "LineString" and len(g.coords) >= 2]
+        if not geoms:
+            return None
+        coords = [geoms[0].coords[0], geoms[-1].coords[-1]]
+    else:
+        coords = list(geometria.coords)
+    if len(coords) < 2:
+        return None
+    (lon1, lat1), (lon2, lat2) = coords[0], coords[-1]
+    return (float(lat1), float(lon1)), (float(lat2), float(lon2))
+
+
+def extremos_preview(
+    barreiras: list[Barreira],
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Início do primeiro trecho e fim do último — pinos A e B no mapa."""
+    if not barreiras:
+        return None
+    ini = extremos_latlon(barreiras[0].geometria)
+    fim = extremos_latlon(barreiras[-1].geometria)
+    if not ini or not fim:
+        return None
+    return ini[0], fim[1]
+
+
+def clique_distinto(
+    visto: tuple[float, float] | None,
+    evento: dict | None,
+    *,
+    eps: float = 1e-7,
+) -> tuple[float, float] | None:
+    """(lat, lon) se o clique do Folium for novo — ignora o mesmo ponto no rerun."""
+    if not evento:
+        return None
+    try:
+        lat = float(evento["lat"])
+        lon = float(evento["lng"] if evento.get("lng") is not None else evento["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if visto is not None and abs(visto[0] - lat) < eps and abs(visto[1] - lon) < eps:
+        return None
+    return (lat, lon)
+
+
+def fundir_coords(trechos: list[list[tuple[float, float]]]) -> list[tuple[float, float]]:
+    """Concatena polilinhas (lon, lat), sem repetir o vértice de emenda."""
+    saida: list[tuple[float, float]] = []
+    for coords in trechos:
+        if len(coords) < 2:
+            continue
+        if saida and saida[-1] == coords[0]:
+            saida.extend(coords[1:])
+        else:
+            saida.extend(coords)
+    return saida
+
+
+def barreira_de_cliques(
+    nome: str,
+    cliques: list[tuple[float, float]],
+    *,
+    tipo: str | None = None,
+    numero_inicio: int | None = None,
+    numero_fim: int | None = None,
+    paridade: str | None = None,
+) -> list[Barreira]:
+    """
+    Traça a barreira por 2 ou 3 cliques no eixo da via (a pé).
+
+    Entre cada par tenta o eixo OSM/Roads; se falhar, liga os cliques em linha.
+    """
+    from core.google_geo import ler_google_api_key
+
+    if len(cliques) < 2:
+        raise ErroExterno("Clique o início e o fim em cima da rua.")
+    pontos = cliques[:3]
+    nome = expandir_abrev_via(nome_via_de_entrada(nome) or nome)
+    if not nome:
+        raise ErroExterno("Informe o nome da rua para o trecho desenhado.")
+    api_key = ler_google_api_key()
+    trechos: list[list[tuple[float, float]]] = []
+    for origem, destino in zip(pontos, pontos[1:]):
+        if origem == destino:
+            continue
+        coords, _origem = coords_eixo_entre_pinos(nome, origem, destino, api_key)
+        if len(coords) >= 2:
+            trechos.append(coords)
+    if not trechos:
+        coords = [(lon, lat) for lat, lon in pontos]
+        origem_geom = "cliques"
+    else:
+        coords = fundir_coords(trechos)
+        origem_geom = "cliques-eixo"
+    tipo_via = _normalizar_tipo(tipo) or "rua"
+    feature = feature_de_linha(coords, nome, origem=origem_geom, tipo=tipo_via)
+    if not feature:
+        raise ErroExterno("Não deu para traçar com esses cliques. Clique de novo no eixo da rua.")
+    barreiras = _features_para_barreiras([feature])
+    return aplicar_metadados(
+        barreiras,
+        numero_inicio=numero_inicio,
+        numero_fim=numero_fim,
+        paridade=paridade,
+    )
 
 
 def buscar_barreira_entre_links(

@@ -43,8 +43,8 @@ def rota_de_geojson(resposta: dict) -> Rota:
 
 def rota_a_pe(origem: Local, destino: Local, api_key: str) -> Rota:
     """
-    Sempre a rota mais curta. A existência de um desvio alternativo sem barreira
-    não altera a decisão — não se pede rota alternativa.
+    Sempre a pé (perfil foot-walking). A existência de um desvio de carro
+    ou de uma rota alternativa sem barreira não altera a decisão.
     """
     corpo = {"coordinates": [[origem.lon, origem.lat], [destino.lon, destino.lat]]}
     cabecalhos = {"Authorization": api_key, "Content-Type": "application/json"}
