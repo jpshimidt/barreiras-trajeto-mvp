@@ -428,9 +428,8 @@ def _secao_formulario() -> None:
                 st.caption("A e B marcados. Opcional: **C** numa curva, ou use os pontos.")
         with col_desfazer:
             if cliques and st.button("Desfazer", key="preview_desfazer_clique"):
-                desfeito = cliques.pop()
+                cliques.pop()
                 st.session_state["preview_cliques"] = cliques
-                st.session_state["preview_click_visto"] = desfeito
                 st.rerun()
         with col_limpar:
             if st.button("Limpar pinos", key="preview_limpar_cliques"):
