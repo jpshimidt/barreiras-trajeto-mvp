@@ -14,6 +14,8 @@ from core.barreiras_osm import (
     buscar_barreira_entre_pontos,
     buscar_barreiras_rua,
     clique_distinto,
+    clique_proximo,
+    colar_clique_na_via,
     comprimento_m,
     consultar_overpass,
     buscar_features_google_rota,
@@ -535,3 +537,56 @@ def test_barreira_de_cliques_cai_na_polilinha_se_eixo_falha(monkeypatch):
 def test_barreira_de_cliques_exige_dois_pontos():
     with pytest.raises(ErroExterno, match="início e o fim"):
         barreira_de_cliques("Rua Cruz de Malta", [(-23.48, -46.61)])
+
+
+def test_colar_clique_na_via_gruda_se_perto(monkeypatch):
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "snappedPoints": [
+                    {"location": {"latitude": -23.4801, "longitude": -46.6101}}
+                ]
+            }
+
+    monkeypatch.setattr("core.barreiras_osm.requests.get", lambda *a, **k: Resp())
+    assert colar_clique_na_via(-23.4800, -46.6100) == (-23.4801, -46.6101)
+
+
+def test_colar_clique_na_via_ignora_asfalto_longe(monkeypatch):
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "snappedPoints": [
+                    {"location": {"latitude": -23.50, "longitude": -46.65}}
+                ]
+            }
+
+    monkeypatch.setattr("core.barreiras_osm.requests.get", lambda *a, **k: Resp())
+    assert colar_clique_na_via(-23.4800, -46.6100) == (-23.4800, -46.6100)
+
+
+def test_colar_clique_na_via_sem_chave_devolve_clique(monkeypatch):
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: None)
+    assert colar_clique_na_via(-23.48, -46.61) == (-23.48, -46.61)
+
+
+def test_clique_proximo_detecta_mesmo_asfalto():
+    assert clique_proximo((-23.4800, -46.6100), (-23.48005, -46.61005), raio_m=15)
+    assert not clique_proximo((-23.4800, -46.6100), (-23.4850, -46.6150), raio_m=15)
+    assert not clique_proximo(None, (-23.48, -46.61))
+
+
+def test_barreira_de_cliques_rejeita_pontos_colados():
+    with pytest.raises(ErroExterno, match="mesmo lugar"):
+        barreira_de_cliques(
+            "Rua Cruz de Malta",
+            [(-23.48000, -46.61000), (-23.48001, -46.61001)],
+        )
