@@ -373,6 +373,16 @@ def test_pontuacao_penaliza_rua_sem_numero_quando_informado():
     assert com_numero > so_rua
 
 
+def test_parse_endereco_maps_sem_numero():
+    endereco = parse_endereco_maps(
+        "R. Cruz de Malta - Parada Inglesa, São Paulo - SP, Brasil"
+    )
+    assert endereco.logradouro == "R. Cruz de Malta"
+    assert endereco.numero is None
+    assert endereco.bairro == "Parada Inglesa"
+    assert endereco.uf == "SP"
+
+
 def test_parse_endereco_maps_aceita_sem_sp_e_cep_sem_hifen():
     """Colagem comum do Google Maps no celular: sem ' - SP' e CEP contínuo."""
     endereco = parse_endereco_maps("Rua Borges, 353 - Parada Inglesa, São paulo, 02247000")

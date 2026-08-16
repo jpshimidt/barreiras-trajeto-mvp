@@ -35,6 +35,12 @@ MAPS_RE_FLEX = re.compile(
     r"(?:,\s*(?P<cep>\d{5}-?\d{3}))?\s*$",
     re.IGNORECASE,
 )
+# Sem número: R. Cruz de Malta - Parada Inglesa, São Paulo - SP, Brasil
+MAPS_RE_SEM_NUMERO = re.compile(
+    r"^(?P<logradouro>.+?)\s+-\s+(?P<bairro>.+?),\s*"
+    r"(?P<cidade>.+?)\s*-\s*(?P<uf>[A-Z]{2})(?:,\s*(?P<pais>.+))?\s*$",
+    re.IGNORECASE,
+)
 MIN_ADEQUACAO_AUTO = 60
 MARGEM_ADEQUACAO = 15
 MIN_ADEQUACAO_ESCOLHA = 25
@@ -115,7 +121,7 @@ def parse_endereco_maps(texto: str) -> EnderecoMaps:
     Aceita variações sem " - SP" ou com CEP sem hífen.
     """
     texto = " ".join(texto.strip().split())
-    for pattern in (MAPS_RE, MAPS_RE_FLEX):
+    for pattern in (MAPS_RE, MAPS_RE_FLEX, MAPS_RE_SEM_NUMERO):
         match = pattern.match(texto)
         if match:
             grupos = match.groupdict()
@@ -124,7 +130,7 @@ def parse_endereco_maps(texto: str) -> EnderecoMaps:
             return EnderecoMaps(
                 texto=texto,
                 logradouro=grupos["logradouro"].strip(),
-                numero=grupos["numero"].strip(),
+                numero=(grupos.get("numero") or "").strip() or None,
                 bairro=grupos["bairro"].strip(),
                 cidade=grupos["cidade"].strip(),
                 uf=(uf or "SP").strip().upper(),

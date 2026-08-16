@@ -12,7 +12,11 @@ from streamlit_folium import st_folium
 from core.auth_app import exigir_admin
 from core.barreiras import TIPOS_BARREIRA, Barreira
 from core.barreiras_cache import invalidar_cache_barreiras, store_barreiras
-from core.barreiras_osm import buscar_barreiras_rua, nome_via_de_entrada
+from core.barreiras_osm import (
+    buscar_barreira_entre_pontos,
+    buscar_barreiras_rua,
+    nome_via_de_entrada,
+)
 from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
 from core.google_geo import buscar_sugestoes_endereco, ler_google_api_key
@@ -56,8 +60,10 @@ def _limpar_preview() -> None:
 def _secao_nova_barreira() -> None:
     st.subheader("Nova barreira")
     st.caption(
-        "Informe o **nome ou endereço da rua**. O sistema busca o traçado no mapa. "
-        "Deixe os números em branco (ou 0) para cadastrar a **rua inteira**."
+        "Informe o **nome ou endereço da rua**. O traçado vem do Google Maps "
+        "(não depende do OpenStreetMap). "
+        "Deixe os números em branco (ou 0) para cadastrar a **rua inteira**. "
+        "Se a busca automática falhar, marque o início e o fim no mapa abaixo."
     )
 
     pendente = st.session_state.pop("_nova_aplicar_sugestao", None)
@@ -125,7 +131,7 @@ def _secao_nova_barreira() -> None:
                 st.error(str(e))
             else:
                 try:
-                    with st.spinner("Consultando OpenStreetMap…"):
+                    with st.spinner("Buscando traçado no mapa…"):
                         preview = buscar_barreiras_rua(
                             entrada,
                             numero_inicio=int(numero_inicio) or None,
@@ -143,6 +149,68 @@ def _secao_nova_barreira() -> None:
                         st.session_state["preview_rotulo"] = preview[0].rotulo
                     else:
                         st.session_state["preview_rotulo"] = nome
+
+    with st.expander("Ou marque início e fim no mapa", expanded=False):
+        st.caption(
+            "Clique no **início** e depois no **fim** da barreira. "
+            "O sistema traça o caminho de carro entre os dois pontos."
+        )
+        pontos = st.session_state.setdefault("desenho_pontos", [])
+        mapa_desenho = folium.Map(
+            location=[-23.48, -46.60],
+            zoom_start=13,
+            tiles="cartodbpositron",
+            control_scale=True,
+        )
+        for i, (lat, lon) in enumerate(pontos):
+            folium.Marker(
+                [lat, lon],
+                tooltip="Início" if i == 0 else "Fim",
+            ).add_to(mapa_desenho)
+        if len(pontos) == 2:
+            folium.PolyLine(pontos, color=COR_BARREIRA, weight=4).add_to(mapa_desenho)
+        clique = st_folium(mapa_desenho, width=None, height=360, key="mapa_desenho")
+        last = (clique or {}).get("last_clicked") or {}
+        if last.get("lat") is not None and last.get("lng") is not None:
+            novo = (round(float(last["lat"]), 6), round(float(last["lng"]), 6))
+            if not pontos or pontos[-1] != novo:
+                if len(pontos) >= 2:
+                    pontos.clear()
+                pontos.append(novo)
+                st.rerun()
+        if pontos:
+            st.caption(" · ".join(
+                f"{'Início' if i == 0 else 'Fim'}: {lat:.5f}, {lon:.5f}"
+                for i, (lat, lon) in enumerate(pontos)
+            ))
+        col_tracar, col_limpar_pts = st.columns(2)
+        with col_tracar:
+            if st.button("Traçar barreira entre os pontos", key="nova_tracar_cliques"):
+                if len(pontos) < 2:
+                    st.error("Clique em dois pontos no mapa (início e fim).")
+                elif not entrada.strip():
+                    st.error("Informe o nome da rua no campo acima.")
+                else:
+                    try:
+                        consumir_busca_barreira_osm()
+                        with st.spinner("Traçando caminho no Google Maps…"):
+                            preview = buscar_barreira_entre_pontos(
+                                entrada,
+                                pontos[0],
+                                pontos[1],
+                                tipo=tipo,
+                            )
+                    except ErroExterno as e:
+                        st.error(str(e))
+                    else:
+                        st.session_state["preview_barreiras"] = preview
+                        st.session_state["preview_entrada"] = entrada.strip()
+                        st.session_state["preview_rotulo"] = preview[0].rotulo if preview else entrada
+                        st.rerun()
+        with col_limpar_pts:
+            if st.button("Limpar pontos", key="nova_limpar_cliques"):
+                st.session_state["desenho_pontos"] = []
+                st.rerun()
 
     preview: list[Barreira] | None = st.session_state.get("preview_barreiras")
     if preview:

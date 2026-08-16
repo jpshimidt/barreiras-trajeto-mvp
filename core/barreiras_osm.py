@@ -69,13 +69,32 @@ def slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", sem_acento.lower()).strip("-")
 
 
+_ABREV_VIA = (
+    (re.compile(r"^R\.\s+", re.IGNORECASE), "Rua "),
+    (re.compile(r"^Av\.\s+", re.IGNORECASE), "Avenida "),
+    (re.compile(r"^Al\.\s+", re.IGNORECASE), "Alameda "),
+    (re.compile(r"^Tv\.\s+", re.IGNORECASE), "Travessa "),
+    (re.compile(r"^Pça\.\s+", re.IGNORECASE), "Praça "),
+    (re.compile(r"^Rod\.\s+", re.IGNORECASE), "Rodovia "),
+)
+
+
+def expandir_abrev_via(nome: str) -> str:
+    """R. / Av. → Rua / Avenida — grafia usual no OSM e no Google."""
+    for padrao, subst in _ABREV_VIA:
+        if padrao.match(nome):
+            return padrao.sub(subst, nome, count=1)
+    return nome
+
+
 def nome_via_de_entrada(texto: str) -> str:
     """Extrai logradouro de endereço colado ou devolve o texto como nome de rua."""
     texto = texto.strip()
     if not texto:
         return ""
     endereco = parse_endereco_maps(texto)
-    return (endereco.logradouro or texto).strip()
+    nome = (endereco.logradouro or texto).strip()
+    return expandir_abrev_via(nome)
 
 
 def montar_consulta(ruas: list[str], relacao_id: int, regex: bool = False) -> str:
@@ -549,110 +568,211 @@ def feature_de_linha(
     }
 
 
-def _pontos_google_para_rota(
-    api_key: str, nome: str, trecho: RegistroTrecho | None
-) -> tuple[tuple[float, float], tuple[float, float]] | None:
-    """Dois pontos (lat, lon) nas extremidades da via, via Geocoding."""
+def _geocode_google(api_key: str, consulta: str) -> dict | None:
     from core.google_geo import GEOCODE_URL
 
+    try:
+        resp = requests.get(
+            GEOCODE_URL,
+            params={
+                "address": consulta,
+                "key": api_key,
+                "components": "country:BR|administrative_area:SP|locality:São Paulo",
+                "language": "pt-BR",
+            },
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    dados = resp.json()
+    if dados.get("status") != "OK":
+        return None
+    resultados = dados.get("results") or []
+    return resultados[0] if resultados else None
+
+
+def _ponto_de_geocode(resultado: dict) -> tuple[float, float] | None:
+    loc = (resultado.get("geometry") or {}).get("location") or {}
+    if loc.get("lat") is None or loc.get("lng") is None:
+        return None
+    return float(loc["lat"]), float(loc["lng"])
+
+
+def _extremos_de_viewport(resultado: dict) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    geom = resultado.get("geometry") or {}
+    box = geom.get("bounds") or geom.get("viewport")
+    if not box:
+        return None
+    sw, ne = box.get("southwest") or {}, box.get("northeast") or {}
+    if None in (sw.get("lat"), sw.get("lng"), ne.get("lat"), ne.get("lng")):
+        return None
+    origem = (float(sw["lat"]), float(sw["lng"]))
+    destino = (float(ne["lat"]), float(ne["lng"]))
+    if origem == destino:
+        return None
+    return origem, destino
+
+
+def _pontos_google_para_rota(
+    api_key: str,
+    nome: str,
+    trecho: RegistroTrecho | None,
+    entrada: str | None = None,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Dois pontos (lat, lon) nas extremidades da via, via Geocoding."""
     if trecho and trecho.tem_faixa():
         consultas = [
             f"{nome}, {trecho.numero_inicio}, {MUNICIPIO}, SP, Brasil",
             f"{nome}, {trecho.numero_fim}, {MUNICIPIO}, SP, Brasil",
         ]
-    else:
-        consultas = [
-            f"{nome}, 1, {MUNICIPIO}, SP, Brasil",
-            f"{nome}, 2500, {MUNICIPIO}, SP, Brasil",
-        ]
+        pontos: list[tuple[float, float]] = []
+        for consulta in consultas:
+            resultado = _geocode_google(api_key, consulta)
+            ponto = _ponto_de_geocode(resultado) if resultado else None
+            if not ponto:
+                return None
+            pontos.append(ponto)
+        if pontos[0] == pontos[1]:
+            return None
+        return pontos[0], pontos[1]
 
-    pontos: list[tuple[float, float]] = []
-    for consulta in consultas:
+    for consulta in (entrada, nome, f"{nome}, {MUNICIPIO}, SP, Brasil"):
+        if not consulta:
+            continue
+        resultado = _geocode_google(api_key, consulta)
+        if not resultado:
+            continue
+        extremos = _extremos_de_viewport(resultado)
+        if extremos:
+            return extremos
+    return None
+
+
+def directions_entre_pontos(
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+    api_key: str | None = None,
+) -> list[tuple[float, float]]:
+    """Caminho entre dois (lat, lon) → coordenadas (lon, lat). Google, depois ORS."""
+    if api_key:
         try:
             resp = requests.get(
-                GEOCODE_URL,
+                DIRECTIONS_URL,
                 params={
-                    "address": consulta,
-                    "key": api_key,
-                    "components": "country:BR|administrative_area:SP|locality:São Paulo",
+                    "origin": f"{origem[0]},{origem[1]}",
+                    "destination": f"{destino[0]},{destino[1]}",
+                    "mode": "driving",
+                    "region": "br",
                     "language": "pt-BR",
+                    "key": api_key,
                 },
                 timeout=TIMEOUT_S,
             )
         except requests.RequestException:
-            return None
-        if resp.status_code != 200:
-            return None
-        dados = resp.json()
-        if dados.get("status") != "OK":
-            return None
-        loc = ((dados.get("results") or [{}])[0].get("geometry") or {}).get("location") or {}
-        if loc.get("lat") is None or loc.get("lng") is None:
-            return None
-        pontos.append((float(loc["lat"]), float(loc["lng"])))
+            resp = None
+        if resp is not None and resp.status_code == 200:
+            dados = resp.json()
+            if dados.get("status") == "OK":
+                rotas = dados.get("routes") or []
+                encoded = ((rotas[0].get("overview_polyline") or {}).get("points")) if rotas else ""
+                coords = decodificar_polyline(encoded or "")
+                if len(coords) >= 2:
+                    return coords
 
-    if len(pontos) != 2:
-        return None
-    if pontos[0] == pontos[1]:
-        return None
-    return pontos[0], pontos[1]
+    from core.ors import ler_api_key
+
+    try:
+        ors_key = ler_api_key()
+    except ErroExterno:
+        ors_key = None
+    if not ors_key:
+        raise ErroExterno(
+            "Não foi possível traçar a via. "
+            "Ative a Directions API no Google Cloud ou confira a chave ORS_API_KEY."
+        )
+    corpo = {"coordinates": [[origem[1], origem[0]], [destino[1], destino[0]]]}
+    try:
+        resp = requests.post(
+            "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+            json=corpo,
+            headers={"Authorization": ors_key, "Content-Type": "application/json"},
+            timeout=TIMEOUT_S,
+        )
+    except requests.RequestException as e:
+        raise ErroExterno(f"Roteamento falhou na rede: {e}") from e
+    if resp.status_code != 200:
+        raise ErroExterno(f"OpenRouteService respondeu HTTP {resp.status_code}")
+    features = resp.json().get("features") or []
+    if not features:
+        return []
+    geom = features[0].get("geometry") or {}
+    return _coords_de_geometria_nominatim(geom) or []
 
 
 def buscar_features_google_rota(
     nome: str,
     trecho: RegistroTrecho | None = None,
     tipo: str | None = None,
+    entrada: str | None = None,
 ) -> list[dict]:
-    """Fallback no Streamlit Cloud: traçado da via via Google Directions."""
+    """Traçado da via via Google Geocoding + Directions (funciona no Streamlit Cloud)."""
     from core.google_geo import ler_google_api_key
 
     api_key = ler_google_api_key()
     if not api_key:
         return []
 
-    extremos = _pontos_google_para_rota(api_key, nome, trecho)
+    extremos = _pontos_google_para_rota(api_key, nome, trecho, entrada=entrada)
     if not extremos:
         return []
-    origem, destino = extremos
     try:
-        resp = requests.get(
-            DIRECTIONS_URL,
-            params={
-                "origin": f"{origem[0]},{origem[1]}",
-                "destination": f"{destino[0]},{destino[1]}",
-                "mode": "driving",
-                "region": "br",
-                "language": "pt-BR",
-                "key": api_key,
-            },
-            timeout=TIMEOUT_S,
-        )
-    except requests.RequestException as e:
-        raise ErroExterno(f"Google Directions falhou na rede: {e}") from e
-    if resp.status_code != 200:
+        coords = directions_entre_pontos(extremos[0], extremos[1], api_key)
+    except ErroExterno:
         return []
-    dados = resp.json()
-    if dados.get("status") != "OK":
-        return []
-    rotas = dados.get("routes") or []
-    if not rotas:
-        return []
-    encoded = ((rotas[0].get("overview_polyline") or {}).get("points")) or ""
-    coords = decodificar_polyline(encoded)
     tipo_via = _normalizar_tipo(tipo) or "rua"
     feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
     return [feature] if feature else []
 
 
-def _features_fallback(sessao: requests.Session, nome: str, trecho: RegistroTrecho, tipo: str | None) -> list[dict]:
-    """Nominatim e, se falhar, Google Directions — usado quando Overpass está bloqueado."""
+def buscar_barreira_entre_pontos(
+    nome: str,
+    origem: tuple[float, float],
+    destino: tuple[float, float],
+    *,
+    tipo: str | None = None,
+) -> list[Barreira]:
+    """Traça a barreira pelo caminho de carro entre dois cliques no mapa."""
+    from core.google_geo import ler_google_api_key
+
+    nome = expandir_abrev_via(nome_via_de_entrada(nome) or nome)
+    if not nome:
+        raise ErroExterno("Informe o nome da rua para o trecho desenhado.")
+    api_key = ler_google_api_key()
+    coords = directions_entre_pontos(origem, destino, api_key)
+    tipo_via = _normalizar_tipo(tipo) or "rua"
+    feature = feature_de_linha(coords, nome, origem="google-directions", tipo=tipo_via)
+    if not feature:
+        raise ErroExterno("O Google não devolveu um traçado entre os dois pontos.")
+    return _features_para_barreiras([feature])
+
+
+def _features_fallback(
+    sessao: requests.Session,
+    nome: str,
+    trecho: RegistroTrecho,
+    tipo: str | None,
+    entrada: str | None = None,
+) -> list[dict]:
+    """Nominatim e Google — usados quando Overpass falha ou não acha a via."""
     try:
         features = buscar_features_nominatim(sessao, nome, trecho)
-    except ErroExterno:
+    except (ErroExterno, Exception):
         features = []
     if features:
         return features
-    return buscar_features_google_rota(nome, trecho, tipo)
+    return buscar_features_google_rota(nome, trecho, tipo, entrada=entrada)
 
 
 def _features_para_barreiras(features: list[dict]) -> list[Barreira]:
@@ -700,25 +820,35 @@ def buscar_barreiras_rua(
     )
 
     sessao = requests.Session()
-    consulta = montar_consulta([nome], relacao_id, regex=regex)
-    features: list[dict]
-    try:
-        resposta = consultar_overpass(sessao, consulta)
+    features: list[dict] = []
 
-        way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
-        marcas_por_way: dict[int, list[MarcaNumero]] = {}
-        if way_ids and trecho.tem_faixa():
-            consulta_nums = montar_consulta_numeros(way_ids)
-            if consulta_nums:
-                resp_nums = consultar_overpass(sessao, consulta_nums)
-                marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
+    # Google primeiro: no Streamlit Cloud o Overpass costuma falhar ou não achar
+    # o nome abreviado (R. Cruz de Malta vs Rua Cruz de Malta).
+    if not regex:
+        try:
+            features = buscar_features_google_rota(nome, trecho, tipo, entrada=entrada)
+        except ErroExterno:
+            features = []
 
-        geojson = overpass_para_geojson(
-            resposta, trechos=[trecho], marcas_por_way=marcas_por_way
-        )
-        features = geojson.get("features") or []
-    except OverpassIndisponivel:
-        features = _features_fallback(sessao, nome, trecho, tipo)
+    if not features:
+        consulta = montar_consulta([nome], relacao_id, regex=regex)
+        try:
+            resposta = consultar_overpass(sessao, consulta)
+
+            way_ids = [e["id"] for e in resposta.get("elements") or [] if e.get("type") == "way"]
+            marcas_por_way: dict[int, list[MarcaNumero]] = {}
+            if way_ids and trecho.tem_faixa():
+                consulta_nums = montar_consulta_numeros(way_ids)
+                if consulta_nums:
+                    resp_nums = consultar_overpass(sessao, consulta_nums)
+                    marcas_por_way = indexar_numeros_por_way(resposta, resp_nums)
+
+            geojson = overpass_para_geojson(
+                resposta, trechos=[trecho], marcas_por_way=marcas_por_way
+            )
+            features = geojson.get("features") or []
+        except OverpassIndisponivel:
+            features = _features_fallback(sessao, nome, trecho, tipo, entrada=entrada)
 
     if not features and not regex:
         return buscar_barreiras_rua(
@@ -732,12 +862,17 @@ def buscar_barreiras_rua(
         )
 
     if not features:
+        try:
+            features = _features_fallback(sessao, nome, trecho, tipo, entrada=entrada)
+        except ErroExterno:
+            features = []
+
+    if not features:
         dica = (
-            f"Nenhum trecho encontrado para {nome!r} no OpenStreetMap. "
-            "Confira a grafia (ex.: como aparece no Google Maps) ou tente só o nome da via."
+            f"Nenhum trecho encontrado para {nome!r}. "
+            "Tente só o nome da via (ex.: Rua Cruz de Malta) "
+            "ou marque o início e o fim no mapa."
         )
-        if trecho.tem_faixa():
-            dica += " Com faixa de número, o OSM precisa ter portas cadastradas na rua."
         raise ErroExterno(dica)
 
     tipo_fixo = _normalizar_tipo(tipo)
