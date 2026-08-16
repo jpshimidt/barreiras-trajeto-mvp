@@ -474,7 +474,7 @@ def pagina_principal() -> None:
     st.caption(
         "Município de São Paulo. Digite o endereço, busque sugestões ou cole como no Maps. "
         "A criança tem direito quando o menor caminho a pé até a escola encosta "
-        "em alguma rua cadastrada como barreira."
+        "em alguma rua cadastrada como barreira. A rota é sempre a pé, nunca GPS de carro."
     )
 
     with st.sidebar:

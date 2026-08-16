@@ -14,8 +14,8 @@ from core.barreiras_osm import (
     buscar_barreiras_rua,
     comprimento_m,
     consultar_overpass,
+    buscar_features_google_rota,
     coords_eixo_entre_pinos,
-    decodificar_polyline,
     feature_de_way,
     nome_via_de_entrada,
     nucleo_nome_via,
@@ -172,13 +172,6 @@ def test_buscar_barreiras_usa_nominatim_quando_overpass_indisponivel(monkeypatch
     assert barreiras[0].nome == "Rua Cruz de Malta"
 
 
-def test_decodificar_polyline_google():
-    # Linha (38.5, -120.2) → (40.7, -120.95) → (43.252, -126.453) do exemplo do Google
-    coords = decodificar_polyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@")
-    assert len(coords) == 3
-    assert coords[0] == pytest.approx((-120.2, 38.5), abs=1e-4)
-
-
 def test_buscar_barreiras_usa_google_quando_nominatim_falha(monkeypatch):
     def overpass_falha(sessao, consulta):
         raise OverpassIndisponivel("todos os mirrors falharam")
@@ -190,11 +183,11 @@ def test_buscar_barreiras_usa_google_quando_nominatim_falha(monkeypatch):
             "coordinates": [[-46.60, -23.48], [-46.59, -23.48]],
         },
         "properties": {
-            "id": "rua-cruz-de-malta-google-directions",
+            "id": "rua-cruz-de-malta-osm-eixo",
             "nome": "Rua Cruz de Malta",
             "tipo": "rua",
             "municipio": "São Paulo",
-            "origem": "google-directions",
+            "origem": "osm-eixo",
         },
     }
 
@@ -221,11 +214,11 @@ def test_buscar_barreiras_google_primeiro(monkeypatch):
             "coordinates": [[-46.60, -23.48], [-46.59, -23.48]],
         },
         "properties": {
-            "id": "rua-cruz-de-malta-google-directions",
+            "id": "rua-cruz-de-malta-osm-eixo",
             "nome": "Rua Cruz de Malta",
             "tipo": "avenida",
             "municipio": "São Paulo",
-            "origem": "google-directions",
+            "origem": "osm-eixo",
         },
     }
     monkeypatch.setattr(
@@ -255,11 +248,11 @@ def test_buscar_barreiras_aplica_faixa_e_paridade(monkeypatch):
             "coordinates": [[-46.60, -23.48], [-46.59, -23.48]],
         },
         "properties": {
-            "id": "rua-cruz-de-malta-google-directions",
+            "id": "rua-cruz-de-malta-osm-eixo",
             "nome": "Rua Cruz de Malta",
             "tipo": "rua",
             "municipio": "São Paulo",
-            "origem": "google-directions",
+            "origem": "osm-eixo",
         },
     }
     monkeypatch.setattr(
@@ -368,6 +361,27 @@ def test_recortar_linha_entre_pinos():
     recorte = recortar_linha_entre_pinos(linha, (-23.4812, -46.6015), (-23.4916, -46.5992))
     assert recorte is not None
     assert recorte.length > 0
+
+
+def test_buscar_features_google_rota_usa_eixo_a_pe(monkeypatch):
+    """Cadastro traça o eixo da via — nunca Google Directions de carro."""
+    chamado = {"eixo": False}
+
+    def fake_eixo(nome, origem, destino, api_key=None):
+        chamado["eixo"] = True
+        return [(-46.60, -23.48), (-46.59, -23.48)], "osm-eixo"
+
+    monkeypatch.setattr("core.barreiras_osm.coords_eixo_entre_pinos", fake_eixo)
+    monkeypatch.setattr(
+        "core.barreiras_osm._pontos_google_para_rota",
+        lambda *a, **k: ((-23.48, -46.60), (-23.48, -46.59)),
+    )
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+
+    features = buscar_features_google_rota("Rua Cruz de Malta")
+    assert chamado["eixo"]
+    assert len(features) == 1
+    assert features[0]["properties"]["origem"] == "osm-eixo"
 
 
 def test_coords_eixo_cai_na_reta_se_osm_e_roads_falham(monkeypatch):

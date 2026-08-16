@@ -2,7 +2,8 @@
 
 Protótipo que decide se uma criança tem direito a transporte escolar: se o menor
 caminho a pé entre a casa e a escola encosta em alguma rua cadastrada como barreira,
-tem direito.
+tem direito. Rota e cadastro de barreiras usam sempre o caminho **a pé**
+(eixo da via / `foot-walking`) — nunca GPS de carro.
 
 | Responsável escolheu a escola | Caminho a pé toca barreira | Resultado |
 |---|---|---|

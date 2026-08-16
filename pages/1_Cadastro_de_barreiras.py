@@ -127,7 +127,7 @@ def _secao_formulario() -> None:
         st.subheader("Nova barreira")
         st.caption(
             "Cole o link do **início** e do **fim** da rua (vale `maps.app.goo.gl`). "
-            "O traçado segue o **eixo da via**, não a rota de carro. Confira no mapa antes de salvar."
+            "O traçado segue o **eixo da via a pé**, nunca o GPS de carro. Confira no mapa antes de salvar."
         )
 
     st.session_state.setdefault("form_paridade", "ambos")
@@ -171,7 +171,7 @@ def _secao_formulario() -> None:
             return
         meta = _metadados_form()
         try:
-            with st.spinner("Traçando a via…"):
+            with st.spinner("Traçando a via a pé…"):
                 if link_ini.strip() and link_fim.strip():
                     preview = buscar_barreira_entre_links(
                         nome or entrada,
@@ -328,7 +328,7 @@ store = _store()
 st.title("🛠️ Cadastro de barreiras")
 st.caption(
     "Cadastre ou edite ruas-barreira. "
-    "O traçado mais fiel vem de **dois links** do Google Maps (início e fim da via)."
+    "O traçado é sempre **a pé** pelo eixo da via — dois links do Maps (início e fim) dão o melhor resultado."
 )
 st.info(f"Armazenamento: **{descricao_store(store)}**")
 
