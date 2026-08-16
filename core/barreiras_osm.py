@@ -838,7 +838,7 @@ def buscar_barreira_entre_pontos(
     tipo_via = _normalizar_tipo(tipo) or "rua"
     feature = feature_de_linha(coords, nome, origem=origem_geom, tipo=tipo_via)
     if not feature:
-        raise ErroExterno("O Google não devolveu um traçado entre os dois pontos.")
+        raise ErroExterno("Não deu para traçar o eixo da via entre os dois pontos.")
     barreiras = _features_para_barreiras([feature])
     for barreira in barreiras:
         if numero_inicio:

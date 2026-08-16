@@ -115,6 +115,7 @@ def _limpar_formulario() -> None:
         "preview_modo_visto",
         "preview_mapa_view",
         "preview_mapa_geracao",
+        "preview_forcar_conferir",
         "form_nome",
         "form_link_ini",
         "form_link_fim",
@@ -140,6 +141,8 @@ def _iniciar_edicao(barreira: Barreira) -> None:
     st.session_state["form_tipo"] = tipo
     st.session_state["preview_barreiras"] = [barreira]
     st.session_state["preview_rotulo"] = barreira.rotulo
+    st.session_state.pop("preview_mapa_view", None)
+    st.session_state["preview_forcar_conferir"] = True
     _resetar_ajuste_mapa()
 
 
@@ -159,11 +162,38 @@ def _resetar_ajuste_mapa() -> None:
     st.session_state["preview_mapa_geracao"] = int(st.session_state.get("preview_mapa_geracao") or 0) + 1
 
 
-def _aplicar_preview(preview: list[Barreira], *, rotulo: str | None = None, descartados: int = 0) -> None:
+def _guardar_vista_mapa(mapa_out: dict | None) -> None:
+    """Guarda centro/zoom só no clique — evita rerun eterno com jitter do Folium."""
+    if not mapa_out:
+        return
+    centro = mapa_out.get("center")
+    if not isinstance(centro, dict) or centro.get("lat") is None:
+        return
+    lng = centro.get("lng")
+    if lng is None:
+        lng = centro.get("lon")
+    if lng is None:
+        return
+    st.session_state["preview_mapa_view"] = {
+        "center": [float(centro["lat"]), float(lng)],
+        "zoom": int(mapa_out.get("zoom") or 14),
+    }
+
+
+def _aplicar_preview(
+    preview: list[Barreira],
+    *,
+    rotulo: str | None = None,
+    descartados: int = 0,
+    manter_vista: bool = False,
+) -> None:
     st.session_state["preview_barreiras"] = preview
     st.session_state["preview_rotulo"] = rotulo or (preview[0].rotulo if preview else "")
     st.session_state["preview_descartados"] = descartados
     _resetar_ajuste_mapa()
+    if not manter_vista:
+        st.session_state.pop("preview_mapa_view", None)
+        st.session_state["preview_forcar_conferir"] = True
 
 
 def _retracar_por_cliques(nome: str, cliques: list[tuple[float, float]]) -> None:
@@ -171,6 +201,7 @@ def _retracar_por_cliques(nome: str, cliques: list[tuple[float, float]]) -> None
         consumir_busca_barreira_osm()
     except ErroExterno as e:
         st.error(str(e))
+        _resetar_ajuste_mapa()
         return
     meta = _metadados_form()
     try:
@@ -185,15 +216,21 @@ def _retracar_por_cliques(nome: str, cliques: list[tuple[float, float]]) -> None
             )
     except ErroExterno as e:
         st.error(str(e))
+        _resetar_ajuste_mapa()
         return
     if not preview:
         st.error("Não deu para traçar com esses pontos. Clique de novo em cima da rua.")
+        _resetar_ajuste_mapa()
         return
-    _aplicar_preview(preview, rotulo=preview[0].rotulo)
+    _aplicar_preview(preview, rotulo=preview[0].rotulo, manter_vista=True)
     st.rerun()
 
 
 def _secao_formulario() -> None:
+    if st.session_state.pop("preview_forcar_conferir", False):
+        st.session_state["preview_modo_mapa"] = "Conferir"
+        st.session_state["preview_modo_visto"] = "Conferir"
+
     editando_id = st.session_state.get("editando_id")
     if editando_id:
         st.subheader(f"Editando: {st.session_state.get('preview_rotulo') or editando_id}")
@@ -386,25 +423,19 @@ def _secao_formulario() -> None:
         key=chave_mapa,
         returned_objects=["last_clicked", "center", "zoom"],
     )
-    if mapa_out:
-        centro = mapa_out.get("center")
-        if isinstance(centro, dict) and centro.get("lat") is not None:
-            st.session_state["preview_mapa_view"] = {
-                "center": [float(centro["lat"]), float(centro["lng"])],
-                "zoom": int(mapa_out.get("zoom") or 14),
-            }
-        if modo != "Conferir":
-            novo = clique_distinto(st.session_state.get("preview_click_visto"), mapa_out.get("last_clicked"))
-            if novo:
-                st.session_state["preview_click_visto"] = novo
-                cliques.append(novo)
-                st.session_state["preview_cliques"] = cliques[:3]
-                if modo == "Ajustar início/fim" and len(cliques) >= 2:
-                    _retracar_por_cliques(nome or preview[0].nome, cliques[:2])
-                elif modo == "Desenhar no eixo" and len(cliques) >= 3:
-                    _retracar_por_cliques(nome or preview[0].nome, cliques[:3])
-                else:
-                    st.rerun()
+    if mapa_out and modo != "Conferir":
+        novo = clique_distinto(st.session_state.get("preview_click_visto"), mapa_out.get("last_clicked"))
+        if novo:
+            _guardar_vista_mapa(mapa_out)
+            st.session_state["preview_click_visto"] = novo
+            cliques.append(novo)
+            st.session_state["preview_cliques"] = cliques[:3]
+            if modo == "Ajustar início/fim" and len(cliques) >= 2:
+                _retracar_por_cliques(nome or preview[0].nome, cliques[:2])
+            elif modo == "Desenhar no eixo" and len(cliques) >= 3:
+                _retracar_por_cliques(nome or preview[0].nome, cliques[:3])
+            else:
+                st.rerun()
 
     st.markdown("**2. Ajustar** — tipo, faixa e paridade (não mudam o desenho)")
     col1, col2, col3, col4 = st.columns(4)
