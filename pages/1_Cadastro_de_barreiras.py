@@ -18,6 +18,7 @@ from core.barreiras_osm import (
     buscar_barreiras_rua,
     comprimento_m,
     nome_via_de_entrada,
+    refinar_preview,
 )
 from core.barreiras_store import descricao_store
 from core.erros import ErroExterno
@@ -44,11 +45,22 @@ def _mapa_preview(barreiras: list[Barreira], *, centro=None) -> folium.Map:
         control_scale=True,
         zoom_start=14,
     )
-    for barreira in barreiras:
+    for i, barreira in enumerate(barreiras, start=1):
         folium.GeoJson(
             barreira.geometria.__geo_interface__,
             style_function=lambda _: {"color": COR_BARREIRA, "weight": 5, "opacity": 0.9},
-            tooltip=barreira.rotulo,
+            tooltip=f"{i}. {barreira.rotulo}",
+        ).add_to(mapa)
+        lon, lat = barreira.geometria.centroid.coords[0]
+        folium.Marker(
+            [lat, lon],
+            tooltip=f"Trecho {i}",
+            icon=folium.DivIcon(
+                html=(
+                    f'<div style="font-size:12px;font-weight:700;color:#fff;'
+                    f'background:#d1242f;border-radius:10px;padding:1px 6px">{i}</div>'
+                )
+            ),
         ).add_to(mapa)
     if barreiras:
         minx, miny, maxx, maxy = barreiras[0].geometria.bounds
@@ -65,6 +77,7 @@ def _limpar_formulario() -> None:
         "preview_barreiras",
         "preview_entrada",
         "preview_rotulo",
+        "preview_descartados",
         "form_nome",
         "form_link_ini",
         "form_link_fim",
@@ -185,8 +198,17 @@ def _secao_formulario() -> None:
             return
         if nome.strip():
             aplicar_metadados(preview, nome=nome.strip())
+        ancora_txt = (entrada or nome or link_ini or "").strip()
+        preview, descartados = refinar_preview(preview, ancora_txt)
+        if not preview:
+            st.error(
+                "Nenhum trecho ficou em São Paulo capital perto deste endereço. "
+                "Use os dois links (início e fim) da rua certa."
+            )
+            return
         st.session_state["preview_barreiras"] = preview
         st.session_state["preview_rotulo"] = preview[0].rotulo if preview else nome
+        st.session_state["preview_descartados"] = descartados
         st.rerun()
 
     preview: list[Barreira] | None = st.session_state.get("preview_barreiras")
@@ -198,6 +220,11 @@ def _secao_formulario() -> None:
     entendido = nome_via_de_entrada(nome or preview[0].nome) or preview[0].nome
     metros = sum(comprimento_m(b) for b in preview)
     st.success(f"Entendi **{entendido}** — {len(preview)} trecho(s), cerca de **{metros:.0f} m**.")
+    descartados = int(st.session_state.get("preview_descartados") or 0)
+    if descartados:
+        st.caption(
+            f"{descartados} trecho(s) de fora da capital (ou longe deste endereço) foram ignorados."
+        )
     if metros < 80:
         st.warning(
             "Traçado curto: provavelmente pegou só um pedaço da rua. "
@@ -206,7 +233,23 @@ def _secao_formulario() -> None:
     if metros > 2500 and (meta_tipo := st.session_state.get("form_tipo")) == "rua":
         st.warning("Mais de 2,5 km para uma “rua”. Confira se o caminho não saiu da via.")
 
-    st_folium(_mapa_preview(preview), width=None, height=400, key="preview_mapa")
+    st.markdown("**Trechos nesta prévia** — remova os que não são desta rua:")
+    for i, barreira in enumerate(list(preview)):
+        col_info, col_rm = st.columns([5, 1])
+        with col_info:
+            st.caption(f"**{i + 1}.** {barreira.rotulo} · ~{comprimento_m(barreira):.0f} m · {barreira.tipo}")
+        with col_rm:
+            if st.button("Remover", key=f"rm_prev_{barreira.id}_{i}", type="secondary"):
+                resto = [b for j, b in enumerate(preview) if j != i]
+                if not resto:
+                    st.session_state["preview_barreiras"] = []
+                    st.session_state.pop("preview_rotulo", None)
+                else:
+                    st.session_state["preview_barreiras"] = resto
+                st.rerun()
+
+    chave_mapa = "preview_mapa_" + "-".join(b.id for b in preview)
+    st_folium(_mapa_preview(preview), width=None, height=400, key=chave_mapa)
 
     st.markdown("**2. Ajustar** — tipo, faixa e paridade (não mudam o desenho)")
     col1, col2, col3, col4 = st.columns(4)

@@ -345,3 +345,31 @@ def test_aplicar_metadados_e_comprimento():
     assert barreira.numero_inicio == 10
     assert barreira.paridade is None
     assert comprimento_m(barreira) > 50
+
+
+def test_filtrar_barreiras_perto_descarta_homonima():
+    from shapely.geometry import LineString
+
+    from core.barreiras import Barreira
+    from core.barreiras_osm import filtrar_barreiras_perto, refinar_preview
+
+    tucuruvi = Barreira(
+        id="sp",
+        nome="Rua Cruz de Malta",
+        tipo="rua",
+        geometria=LineString([(-46.608, -23.478), (-46.607, -23.477)]),
+    )
+    guarulhos = Barreira(
+        id="gru",
+        nome="Rua Cruz de Malta",
+        tipo="rua",
+        geometria=LineString([(-46.48, -23.44), (-46.479, -23.439)]),
+    )
+    perto = filtrar_barreiras_perto([tucuruvi, guarulhos], -23.478, -46.608, raio_m=2500)
+    assert [b.id for b in perto] == ["sp"]
+
+    filtradas, removidos = refinar_preview(
+        [tucuruvi, guarulhos], ancora=(-23.478, -46.608)
+    )
+    assert [b.id for b in filtradas] == ["sp"]
+    assert removidos == 1
