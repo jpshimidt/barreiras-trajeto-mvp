@@ -48,8 +48,11 @@ html, body, [class*="css"] {
 }
 [data-testid="stToolbar"] { right: 1rem; }
 
-[data-testid="stAppViewContainer"] .main .block-container {
-  padding-top: 0.6rem !important;
+[data-testid="stAppViewContainer"] .main .block-container,
+[data-testid="stMainBlockContainer"],
+.stMainBlockContainer,
+.block-container {
+  padding-top: 0.5rem !important;
   padding-bottom: 3rem !important;
   max-width: 1320px;
 }
@@ -59,6 +62,8 @@ html, body, [class*="css"] {
   margin-top: 0 !important;
   padding-top: 0 !important;
 }
+
+[data-testid="stDecoration"] { display: none; }
 
 [data-testid="stSidebar"] {
   background:
