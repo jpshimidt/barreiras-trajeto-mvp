@@ -14,9 +14,12 @@ from core.barreiras import TIPOS_BARREIRA, Barreira
 from core.barreiras_cache import invalidar_cache_barreiras, store_barreiras
 from core.barreiras_osm import (
     aplicar_metadados,
+    barreira_de_cliques,
     buscar_barreira_entre_links,
     buscar_barreiras_rua,
+    clique_distinto,
     comprimento_m,
+    extremos_preview,
     nome_via_de_entrada,
     refinar_preview,
 )
@@ -38,12 +41,33 @@ def _store():
     return store_barreiras(ARQUIVO_BARREIRAS)
 
 
-def _mapa_preview(barreiras: list[Barreira], *, centro=None) -> folium.Map:
+def _pino_letra(lat: float, lon: float, letra: str, cor: str) -> folium.Marker:
+    return folium.Marker(
+        [lat, lon],
+        tooltip=letra,
+        icon=folium.DivIcon(
+            html=(
+                f'<div style="font-size:12px;font-weight:700;color:#fff;'
+                f"background:{cor};border-radius:10px;padding:1px 7px;"
+                f'border:1px solid #fff">{letra}</div>'
+            )
+        ),
+    )
+
+
+def _mapa_preview(
+    barreiras: list[Barreira],
+    *,
+    centro=None,
+    zoom: int | None = None,
+    cliques: list[tuple[float, float]] | None = None,
+    mostrar_extremos: bool = True,
+) -> folium.Map:
     mapa = folium.Map(
         location=centro or [-23.55, -46.63],
         tiles="cartodbpositron",
         control_scale=True,
-        zoom_start=14,
+        zoom_start=zoom or 14,
     )
     for i, barreira in enumerate(barreiras, start=1):
         folium.GeoJson(
@@ -62,7 +86,14 @@ def _mapa_preview(barreiras: list[Barreira], *, centro=None) -> folium.Map:
                 )
             ),
         ).add_to(mapa)
-    if barreiras:
+    extremos = extremos_preview(barreiras) if mostrar_extremos and barreiras else None
+    if extremos and not cliques:
+        _pino_letra(*extremos[0], "A", "#111827").add_to(mapa)
+        _pino_letra(*extremos[1], "B", "#111827").add_to(mapa)
+    for i, (lat, lon) in enumerate(cliques or [], start=1):
+        letra = {1: "A", 2: "B", 3: "C"}.get(i, str(i))
+        _pino_letra(lat, lon, letra, "#1d4ed8").add_to(mapa)
+    if barreiras and not centro:
         minx, miny, maxx, maxy = barreiras[0].geometria.bounds
         for barreira in barreiras[1:]:
             bx0, by0, bx1, by1 = barreira.geometria.bounds
@@ -78,6 +109,12 @@ def _limpar_formulario() -> None:
         "preview_entrada",
         "preview_rotulo",
         "preview_descartados",
+        "preview_cliques",
+        "preview_click_visto",
+        "preview_modo_mapa",
+        "preview_modo_visto",
+        "preview_mapa_view",
+        "preview_mapa_geracao",
         "form_nome",
         "form_link_ini",
         "form_link_fim",
@@ -103,6 +140,7 @@ def _iniciar_edicao(barreira: Barreira) -> None:
     st.session_state["form_tipo"] = tipo
     st.session_state["preview_barreiras"] = [barreira]
     st.session_state["preview_rotulo"] = barreira.rotulo
+    _resetar_ajuste_mapa()
 
 
 def _metadados_form() -> dict:
@@ -113,6 +151,46 @@ def _metadados_form() -> dict:
         "numero_fim": int(st.session_state.get("form_num_fim") or 0) or None,
         "paridade": st.session_state.get("form_paridade") or "ambos",
     }
+
+
+def _resetar_ajuste_mapa() -> None:
+    st.session_state["preview_cliques"] = []
+    st.session_state.pop("preview_click_visto", None)
+    st.session_state["preview_mapa_geracao"] = int(st.session_state.get("preview_mapa_geracao") or 0) + 1
+
+
+def _aplicar_preview(preview: list[Barreira], *, rotulo: str | None = None, descartados: int = 0) -> None:
+    st.session_state["preview_barreiras"] = preview
+    st.session_state["preview_rotulo"] = rotulo or (preview[0].rotulo if preview else "")
+    st.session_state["preview_descartados"] = descartados
+    _resetar_ajuste_mapa()
+
+
+def _retracar_por_cliques(nome: str, cliques: list[tuple[float, float]]) -> None:
+    try:
+        consumir_busca_barreira_osm()
+    except ErroExterno as e:
+        st.error(str(e))
+        return
+    meta = _metadados_form()
+    try:
+        with st.spinner("Refazendo o eixo a pé…"):
+            preview = barreira_de_cliques(
+                nome,
+                cliques,
+                tipo=meta["tipo"],
+                numero_inicio=meta["numero_inicio"],
+                numero_fim=meta["numero_fim"],
+                paridade=meta["paridade"],
+            )
+    except ErroExterno as e:
+        st.error(str(e))
+        return
+    if not preview:
+        st.error("Não deu para traçar com esses pontos. Clique de novo em cima da rua.")
+        return
+    _aplicar_preview(preview, rotulo=preview[0].rotulo)
+    st.rerun()
 
 
 def _secao_formulario() -> None:
@@ -206,9 +284,7 @@ def _secao_formulario() -> None:
                 "Use os dois links (início e fim) da rua certa."
             )
             return
-        st.session_state["preview_barreiras"] = preview
-        st.session_state["preview_rotulo"] = preview[0].rotulo if preview else nome
-        st.session_state["preview_descartados"] = descartados
+        _aplicar_preview(preview, rotulo=preview[0].rotulo if preview else nome, descartados=descartados)
         st.rerun()
 
     preview: list[Barreira] | None = st.session_state.get("preview_barreiras")
@@ -246,10 +322,89 @@ def _secao_formulario() -> None:
                     st.session_state.pop("preview_rotulo", None)
                 else:
                     st.session_state["preview_barreiras"] = resto
+                _resetar_ajuste_mapa()
                 st.rerun()
 
-    chave_mapa = "preview_mapa_" + "-".join(b.id for b in preview)
-    st_folium(_mapa_preview(preview), width=None, height=400, key=chave_mapa)
+    modos = ("Conferir", "Ajustar início/fim", "Desenhar no eixo")
+    modo = st.radio(
+        "No mapa",
+        modos,
+        horizontal=True,
+        key="preview_modo_mapa",
+        help="Conferir e remover já bastam na maioria das vezes. "
+        "Ajuste os pinos se a vermelha saiu da rua. Desenhe só no último caso.",
+    )
+    if modo == "Ajustar início/fim":
+        st.caption(
+            "Clique o **início (A)** e o **fim (B)** em cima da rua. "
+            "O eixo a pé refaz sozinho — como arrastar os extremos da vermelha."
+        )
+    elif modo == "Desenhar no eixo":
+        st.caption(
+            "Último caso: clique **2 ou 3 pontos** em cima do eixo da rua "
+            "(curvas longas pedem o terceiro). Depois use o botão."
+        )
+    else:
+        st.caption("Confira a linha vermelha. Remova acima o trecho que não é desta rua.")
+
+    if st.session_state.get("preview_modo_visto") != modo:
+        st.session_state["preview_modo_visto"] = modo
+        if st.session_state.get("preview_cliques"):
+            _resetar_ajuste_mapa()
+            st.rerun()
+
+    cliques: list[tuple[float, float]] = list(st.session_state.get("preview_cliques") or [])
+    if modo != "Conferir":
+        col_status, col_limpar = st.columns([4, 1])
+        with col_status:
+            if not cliques:
+                st.caption("Próximo clique: **A** (início).")
+            elif len(cliques) == 1:
+                st.caption("Próximo clique: **B** (fim).")
+            elif modo == "Desenhar no eixo":
+                st.caption("Opcional: clique **C** no meio de uma curva, ou use os pontos.")
+        with col_limpar:
+            if st.button("Limpar cliques", key="preview_limpar_cliques"):
+                _resetar_ajuste_mapa()
+                st.rerun()
+        if modo == "Desenhar no eixo" and len(cliques) >= 2:
+            if st.button("Usar estes pontos", type="primary", key="preview_usar_cliques"):
+                _retracar_por_cliques(nome or preview[0].nome, cliques)
+
+    vista = st.session_state.get("preview_mapa_view") or {}
+    geracao = int(st.session_state.get("preview_mapa_geracao") or 0)
+    chave_mapa = f"preview_mapa_{geracao}_{modo}_{len(cliques)}_" + "-".join(b.id for b in preview)
+    mapa_out = st_folium(
+        _mapa_preview(
+            preview,
+            centro=vista.get("center"),
+            zoom=vista.get("zoom"),
+            cliques=cliques if modo != "Conferir" else None,
+        ),
+        width=None,
+        height=420,
+        key=chave_mapa,
+        returned_objects=["last_clicked", "center", "zoom"],
+    )
+    if mapa_out:
+        centro = mapa_out.get("center")
+        if isinstance(centro, dict) and centro.get("lat") is not None:
+            st.session_state["preview_mapa_view"] = {
+                "center": [float(centro["lat"]), float(centro["lng"])],
+                "zoom": int(mapa_out.get("zoom") or 14),
+            }
+        if modo != "Conferir":
+            novo = clique_distinto(st.session_state.get("preview_click_visto"), mapa_out.get("last_clicked"))
+            if novo:
+                st.session_state["preview_click_visto"] = novo
+                cliques.append(novo)
+                st.session_state["preview_cliques"] = cliques[:3]
+                if modo == "Ajustar início/fim" and len(cliques) >= 2:
+                    _retracar_por_cliques(nome or preview[0].nome, cliques[:2])
+                elif modo == "Desenhar no eixo" and len(cliques) >= 3:
+                    _retracar_por_cliques(nome or preview[0].nome, cliques[:3])
+                else:
+                    st.rerun()
 
     st.markdown("**2. Ajustar** — tipo, faixa e paridade (não mudam o desenho)")
     col1, col2, col3, col4 = st.columns(4)
@@ -327,8 +482,8 @@ store = _store()
 
 st.title("🛠️ Cadastro de barreiras")
 st.caption(
-    "Cadastre ou edite ruas-barreira. "
-    "O traçado é sempre **a pé** pelo eixo da via — dois links do Maps (início e fim) dão o melhor resultado."
+    "Cadastre ou edite ruas-barreira. Traçado **a pé** pelo eixo da via. "
+    "Confira no mapa, remova trecho extra, ajuste início/fim ou desenhe 2–3 cliques no eixo."
 )
 st.info(f"Armazenamento: **{descricao_store(store)}**")
 

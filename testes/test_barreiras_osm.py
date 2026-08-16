@@ -9,14 +9,19 @@ from core.barreiras_osm import (
     OVERPASS_ENDPOINTS,
     OverpassIndisponivel,
     aplicar_metadados,
+    barreira_de_cliques,
     buscar_barreira_entre_links,
     buscar_barreira_entre_pontos,
     buscar_barreiras_rua,
+    clique_distinto,
     comprimento_m,
     consultar_overpass,
     buscar_features_google_rota,
     coords_eixo_entre_pinos,
+    extremos_latlon,
+    extremos_preview,
     feature_de_way,
+    fundir_coords,
     nome_via_de_entrada,
     nucleo_nome_via,
     overpass_para_geojson,
@@ -424,3 +429,109 @@ def test_filtrar_barreiras_perto_descarta_homonima():
     )
     assert [b.id for b in filtradas] == ["sp"]
     assert removidos == 1
+
+
+def test_extremos_latlon_e_preview():
+    from shapely.geometry import LineString, MultiLineString
+
+    from core.barreiras import Barreira
+
+    linha = LineString([(-46.61, -23.48), (-46.60, -23.47)])
+    assert extremos_latlon(linha) == ((-23.48, -46.61), (-23.47, -46.60))
+
+    multi = MultiLineString(
+        [
+            LineString([(-46.61, -23.48), (-46.605, -23.475)]),
+            LineString([(-46.605, -23.475), (-46.60, -23.47)]),
+        ]
+    )
+    assert extremos_latlon(multi) == ((-23.48, -46.61), (-23.47, -46.60))
+
+    a = Barreira(id="a", nome="Rua X", tipo="rua", geometria=linha)
+    b = Barreira(
+        id="b",
+        nome="Rua X",
+        tipo="rua",
+        geometria=LineString([(-46.60, -23.47), (-46.59, -23.46)]),
+    )
+    assert extremos_preview([a, b]) == ((-23.48, -46.61), (-23.46, -46.59))
+
+
+def test_clique_distinto_ignora_rerun_do_mesmo_ponto():
+    evento = {"lat": -23.48, "lng": -46.61}
+    primeiro = clique_distinto(None, evento)
+    assert primeiro == (-23.48, -46.61)
+    assert clique_distinto(primeiro, evento) is None
+    assert clique_distinto(primeiro, {"lat": -23.49, "lon": -46.60}) == (-23.49, -46.60)
+    assert clique_distinto(None, {}) is None
+
+
+def test_fundir_coords_nao_repete_emenda():
+    a = [(-46.61, -23.48), (-46.605, -23.475)]
+    b = [(-46.605, -23.475), (-46.60, -23.47)]
+    assert fundir_coords([a, b]) == [
+        (-46.61, -23.48),
+        (-46.605, -23.475),
+        (-46.60, -23.47),
+    ]
+
+
+def test_barreira_de_cliques_dois_pontos(monkeypatch):
+    monkeypatch.setattr(
+        "core.barreiras_osm.coords_eixo_entre_pinos",
+        lambda nome, origem, destino, api_key=None: (
+            [(origem[1], origem[0]), (destino[1], destino[0])],
+            "osm-eixo",
+        ),
+    )
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+    barreiras = barreira_de_cliques(
+        "R. Cruz de Malta",
+        [(-23.480, -46.610), (-23.476, -46.606)],
+        tipo="rua",
+    )
+    assert len(barreiras) == 1
+    assert barreiras[0].nome == "Rua Cruz de Malta"
+    assert list(barreiras[0].geometria.coords)[0] == (-46.610, -23.480)
+
+
+def test_barreira_de_cliques_tres_pontos_concatena(monkeypatch):
+    monkeypatch.setattr(
+        "core.barreiras_osm.coords_eixo_entre_pinos",
+        lambda nome, origem, destino, api_key=None: (
+            [(origem[1], origem[0]), (destino[1], destino[0])],
+            "osm-eixo",
+        ),
+    )
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: "fake")
+    barreiras = barreira_de_cliques(
+        "Rua Cruz de Malta",
+        [(-23.480, -46.610), (-23.478, -46.608), (-23.476, -46.606)],
+    )
+    coords = list(barreiras[0].geometria.coords)
+    assert coords == [
+        (-46.610, -23.480),
+        (-46.608, -23.478),
+        (-46.606, -23.476),
+    ]
+
+
+def test_barreira_de_cliques_cai_na_polilinha_se_eixo_falha(monkeypatch):
+    monkeypatch.setattr(
+        "core.barreiras_osm.coords_eixo_entre_pinos",
+        lambda *a, **k: ([], "vazio"),
+    )
+    monkeypatch.setattr("core.google_geo.ler_google_api_key", lambda: None)
+    barreiras = barreira_de_cliques(
+        "Rua Cruz de Malta",
+        [(-23.480, -46.610), (-23.476, -46.606)],
+    )
+    assert list(barreiras[0].geometria.coords) == [
+        (-46.610, -23.480),
+        (-46.606, -23.476),
+    ]
+
+
+def test_barreira_de_cliques_exige_dois_pontos():
+    with pytest.raises(ErroExterno, match="início e o fim"):
+        barreira_de_cliques("Rua Cruz de Malta", [(-23.48, -46.61)])
